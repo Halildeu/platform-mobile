@@ -1,0 +1,10 @@
+{
+  "type": "partial",
+  "seq": 3,
+  "confirmed": "[redacted]",
+  "tentative": "[redacted]",
+  "elapsed_ms": 1250,
+  "rms": 0.14,
+  "source": "mic",
+  "speaker": "speaker-redacted"
+}

@@ -1,0 +1,9 @@
+{
+  "type": "final",
+  "seq": 4,
+  "text": "[redacted]",
+  "reason": "silence",
+  "elapsed_ms": 3200,
+  "rms": 0.08,
+  "audio_path": "redacted.wav"
+}

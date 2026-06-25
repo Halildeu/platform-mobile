@@ -1,0 +1,10 @@
+{
+  "sourceRepository": "Halildeu/platform-ai",
+  "sourcePath": "docs/contracts/ws-stream-events.schema.json",
+  "sourceRef": "881eccee28ac89a104e8b59bdcdf645196533b1e",
+  "sourceBlobSha": "c88cec831915c136dfb19ef7347b90753aa6149b",
+  "sourceRawUrl": "https://raw.githubusercontent.com/Halildeu/platform-ai/881eccee28ac89a104e8b59bdcdf645196533b1e/docs/contracts/ws-stream-events.schema.json",
+  "contractIssue": "Halildeu/platform-ai#62",
+  "mobileIssue": "Halildeu/platform-mobile#12",
+  "pinnedAt": "2026-06-25"
+}

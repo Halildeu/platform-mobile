@@ -1,0 +1,6 @@
+{
+  "type": "ready",
+  "sample_rate": 4000,
+  "live_model": "live-model-redacted",
+  "final_model": "final-model-redacted"
+}
