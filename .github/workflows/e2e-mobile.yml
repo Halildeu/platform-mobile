@@ -1,0 +1,83 @@
+name: E2E — Mobile (Maestro + Detox)
+#
+# Faz 24 M6 mobile E2E harness.
+#
+# Trigger model (Opsiyon 3 — local-first, see docs/e2e-strategy.md):
+#   - workflow_dispatch: manual run from Actions UI or `gh workflow run`
+#   - pull_request path filter: only runs when the E2E surfaces change,
+#     so a docs/renderer-copy PR does not pay the mobile CI tax
+#
+# Runner: `runs-on: [self-hosted, macos]` when a self-hosted mac is
+# available; falls back to a stub job that documents the local command
+# so a green baseline exists in the PR checks without paying the
+# billing-blocked `macos-latest` cost. Flip the runner label + remove
+# the stub once İ-M4 lands the runner choice.
+
+on:
+  workflow_dispatch:
+    inputs:
+      track:
+        description: 'Which E2E track to run'
+        required: true
+        default: 'maestro'
+        type: choice
+        options:
+          - maestro
+          - detox-ios
+          - detox-android
+  pull_request:
+    paths:
+      - '.maestro/**'
+      - '.detoxrc.js'
+      - 'e2e/**'
+      - 'package.json'
+      - '.github/workflows/e2e-mobile.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  # Documents that E2E is wired without paying macOS-hosted minutes; a
+  # self-hosted mac runner flips this to a real Maestro / Detox job.
+  # Keeps green baseline so a mobile PR's Checks tab is honest.
+  stub-until-runner:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: E2E runner not yet wired (see docs/e2e-strategy.md § Runner)
+        run: |
+          echo "::notice::E2E mobile harness is scaffolded but no macOS runner"
+          echo "::notice::has been wired yet. Run locally:"
+          echo "  npm run test:maestro         # Maestro flow smoke"
+          echo "  npm run test:e2e:ios         # Detox iOS (needs prebuild)"
+          echo "  npm run test:e2e:android     # Detox Android (needs prebuild)"
+          echo "See docs/e2e-strategy.md § Runner for the wiring decision."
+
+  # Manual dispatch on a self-hosted mac. Ubuntu fallback keeps the job
+  # visible (with a clear error) if someone dispatches without a runner.
+  maestro-dispatch:
+    if: github.event_name == 'workflow_dispatch' && inputs.track == 'maestro'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail-loud without a mac runner
+        run: |
+          echo "::error::Maestro requires a macOS runner with the iOS"
+          echo "::error::simulator (or an Android emulator). This job stub"
+          echo "::error::exits 1 so a dispatch without a runner is visible"
+          echo "::error::instead of silently passing."
+          echo "::error::Local command: npm run test:maestro"
+          exit 1
+
+  detox-dispatch:
+    if: github.event_name == 'workflow_dispatch' && startsWith(inputs.track, 'detox-')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail-loud without a mac runner + prebuild
+        run: |
+          echo "::error::Detox needs the Expo prebuild committed + a native"
+          echo "::error::binary produced by \`eas build --profile development\`,"
+          echo "::error::plus a runner with the iOS simulator or Android"
+          echo "::error::emulator. See docs/e2e-strategy.md § Roadmap İ-M2."
+          exit 1
