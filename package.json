@@ -15,7 +15,10 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "format": "prettier --write .",
+    "contract:ws": "node scripts/validate-ws-stream-contract.js",
+    "contract:ws:fetch": "node scripts/validate-ws-stream-contract.js --fetch",
     "test": "jest",
+    "test:contracts": "npm run contract:ws && jest src/contracts/__tests__/wsStreamEvents.contract.test.ts --runInBand",
     "test:watch": "jest --watch",
     "test:e2e:ios": "detox test --configuration ios.sim.release",
     "test:e2e:android": "detox test --configuration android.emu.release",
@@ -61,9 +64,13 @@
     "jest": "^29.7.0",
     "jest-expo": "~52.0.0",
     "@testing-library/react-native": "^12.9.0",
+    "react-test-renderer": "18.3.1",
     "detox": "^20.28.0",
     "eslint": "^9.0.0",
     "eslint-config-expo": "~8.0.0",
     "prettier": "^3.4.0"
+  },
+  "jest": {
+    "preset": "jest-expo"
   }
 }

@@ -1,0 +1,47 @@
+name: ws-stream contract
+
+on:
+  pull_request:
+    paths:
+      - 'contracts/**'
+      - 'src/contracts/**'
+      - 'scripts/validate-ws-stream-contract.js'
+      - 'package.json'
+      - 'tsconfig.json'
+      - '.github/workflows/ws-stream-contract.yml'
+  push:
+    branches:
+      - main
+    paths:
+      - 'contracts/**'
+      - 'src/contracts/**'
+      - 'scripts/validate-ws-stream-contract.js'
+      - 'package.json'
+      - 'tsconfig.json'
+      - '.github/workflows/ws-stream-contract.yml'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Validate local contract fixtures
+        run: npm run test:contracts
+
+      - name: Validate pinned producer schema fetch
+        run: npm run contract:ws:fetch
