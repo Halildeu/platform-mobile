@@ -1,0 +1,36 @@
+# Faz 24 M6 mobile E2E — app-launch smoke.
+#
+# Cheapest useful signal: does the app actually launch on the platform?
+# On red, either the JS bundle is broken, the OIDC/Runtime config is
+# missing, or the Expo Router entry threw. We assert on a stable initial
+# screen element instead of a random text so a copy tweak does not break
+# the flow.
+#
+# testID contract (renderer):
+#   - `app-root`             — root View that mounts after the JS bundle
+#                              finishes loading (App.tsx or equivalent).
+#   - `meeting-list-header`  — the header of the meeting list screen the
+#                              user lands on when signed-in (or the login
+#                              CTA when signed-out).
+#
+# NOTE: if these testIDs are missing from the app the flow fails with a
+# clear "element not found" — that is the signal to wire them in the
+# renderer before enabling this flow in CI.
+
+appId: ${APP_ID}
+name: app-launch
+
+---
+- launchApp:
+    clearState: true
+    clearKeychain: true
+
+- assertVisible:
+    id: "app-root"
+    timeout: 30000
+
+- assertVisible:
+    id: "meeting-list-header"
+    timeout: 15000
+
+- takeScreenshot: app-launch-success

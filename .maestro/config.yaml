@@ -1,0 +1,21 @@
+# Maestro global config — platform-mobile Meeting Intelligence
+#
+# Flow-first: E2E scenarios live under `.maestro/flows/*.yaml`. Each flow
+# is idempotent (safe to re-run) and self-contained (no shared state
+# between files). Framework choice + rationale: docs/e2e-strategy.md.
+#
+# App identifier resolves via `app.json` (`com.acikplatform.meetingintel`).
+# Simulator + device orchestration handled by Maestro Studio / CLI.
+
+flows:
+  - flows/*.yaml
+
+executionOrder:
+  # Smoke flow runs first — it exercises the launch + auth stub and gives
+  # us a fast "is the app even usable" signal before deeper flows run.
+  continueOnFailure: false
+
+# Runtime env exposed to every flow via `${MAESTRO_*}` — CI populates
+# from GitHub Actions secrets when the workflow_dispatch fires.
+env:
+  APP_ID: com.acikplatform.meetingintel
