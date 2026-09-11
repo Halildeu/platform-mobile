@@ -22,7 +22,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  android-build:
+  build-android-apk:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -70,9 +70,9 @@ jobs:
         run: df -h . "$RUNNER_TEMP"
 
   android-maestro:
-    needs: android-build
+    needs: build-android-apk
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 45
     env:
       CI: "1"
       MAESTRO_CLI_NO_ANALYTICS: "1"
