@@ -45,7 +45,9 @@ jobs:
         run: npx expo prebuild --platform android --no-install
       - name: Build emulator APK from this checkout
         working-directory: android
-        run: ./gradlew :app:assembleRelease -PreactNativeArchitectures=x86_64 --no-daemon --max-workers=2
+        # Previous run exhausted the Expo template's 512 MiB Metaspace during lint.
+        # Bound concurrency and retain lint; emulator starts only after Gradle exits.
+        run: ./gradlew :app:assembleRelease -PreactNativeArchitectures=x86_64 '-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=1536m -Dfile.encoding=UTF-8' -Dorg.gradle.parallel=false --no-daemon --max-workers=1
       - name: Install pinned Maestro CLI
         shell: bash
         run: |
