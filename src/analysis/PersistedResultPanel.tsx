@@ -50,7 +50,7 @@ function ResultForMeeting({ meetingId, load = persistedResult }: Props) {
       <Pressable accessibilityRole="button" onPress={() => setSources(!sources)}><Text style={styles.link}>{sources ? 'Kaynakları gizle' : 'Kaynakları göster'}</Text></Pressable>
       {sources && (result.sources.length ? result.sources.map((s, i) => <View key={i}>
         <Text style={styles.title}>{s.claim}</Text><Text selectable style={styles.text}>{s.text}</Text>
-        {s.startSec !== null && <Text style={styles.text}>Kayıtta {s.startSec}. saniye</Text>}
+        <Text style={styles.text}>Kaynak {i + 1}</Text>
       </View>) : <Text style={styles.text}>Bu sonuçta kaynak alıntısı bulunmuyor.</Text>)}
     </>}
   </View>;
