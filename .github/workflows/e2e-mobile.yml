@@ -121,7 +121,11 @@ jobs:
           script: |
             adb install -r artifacts/apk/app-release.apk
             mkdir -p artifacts/maestro
-            maestro test -e APP_ID=com.workcube.meeting --format junit --output artifacts/maestro/results.xml --debug-output artifacts/maestro .maestro/
+            maestro test -e APP_ID=com.workcube.meeting --format junit --output artifacts/maestro/results.xml --debug-output artifacts/maestro --test-output-dir artifacts/maestro .maestro/
+      - name: Require both successful-flow screenshots
+        run: |
+          test -n "$(find artifacts/maestro -type f -name '*app-launch-success*.png' -print -quit)"
+          test -n "$(find artifacts/maestro -type f -name '*transcript-revised-demo*.png' -print -quit)"
       - name: Measure disk after emulator
         if: always()
         run: df -h . "$RUNNER_TEMP"
