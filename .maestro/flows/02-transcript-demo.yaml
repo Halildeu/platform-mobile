@@ -1,0 +1,18 @@
+appId: ${APP_ID}
+name: transcript-demo-revision
+---
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible:
+      id: "open-transcript-demo"
+    timeout: 30000
+- tapOn:
+    id: "open-transcript-demo"
+- extendedWaitUntil:
+    visible: "Üçüncü kararımız: Salı saat 14’te değerlendirme toplantısı."
+    timeout: 20000
+- takeScreenshot: transcript-revised-demo
+- tapOn:
+    id: "restart-transcript-demo"
+- assertNotVisible: "Üçüncü kararımız: Salı saat 14’te değerlendirme toplantısı."

@@ -52,6 +52,8 @@ jobs:
           echo "  npm run test:e2e:ios         # Detox iOS (needs prebuild)"
           echo "  npm run test:e2e:android     # Detox Android (needs prebuild)"
           echo "See docs/e2e-strategy.md § Runner for the wiring decision."
+          echo "::error::Device E2E was not executed. This check cannot establish acceptance."
+          exit 1
 
   # Manual dispatch on a self-hosted mac. Ubuntu fallback keeps the job
   # visible (with a clear error) if someone dispatches without a runner.

@@ -25,12 +25,14 @@ name: app-launch
     clearState: true
     clearKeychain: true
 
-- assertVisible:
-    id: "app-root"
+- extendedWaitUntil:
+    visible:
+      id: "app-root"
     timeout: 30000
 
-- assertVisible:
-    id: "meeting-list-header"
+- extendedWaitUntil:
+    visible:
+      id: "app-home-title"
     timeout: 15000
 
 - takeScreenshot: app-launch-success
