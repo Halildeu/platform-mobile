@@ -4,15 +4,16 @@ on:
   workflow_dispatch:
   pull_request:
     paths:
-      - 'app/**'
-      - 'src/**'
-      - 'plugins/**'
-      - 'assets/**'
-      - '.maestro/**'
-      - 'app.json'
-      - 'package*.json'
-      - 'babel.config.js'
-      - '.github/workflows/e2e-mobile.yml'
+      - "app/**"
+      - "src/**"
+      - "plugins/**"
+      - "assets/**"
+      - ".maestro/**"
+      - "app.json"
+      - "package*.json"
+      - "babel.config.js"
+      - "scripts/e2e-apk*"
+      - ".github/workflows/e2e-mobile.yml"
 
 permissions:
   contents: read
@@ -21,24 +22,28 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  android-maestro:
+  android-build:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
-      CI: '1'
-      EXPO_NO_TELEMETRY: '1'
-      MAESTRO_CLI_NO_ANALYTICS: '1'
+      CI: "1"
+      EXPO_NO_TELEMETRY: "1"
+      MAESTRO_CLI_NO_ANALYTICS: "1"
     steps:
       - uses: actions/checkout@v4
+      - name: Measure disk before build
+        run: df -h . "$RUNNER_TEMP"
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: "22"
           cache: npm
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
+          java-version: "17"
       - uses: android-actions/setup-android@v3
+      - name: Test artifact handoff guard
+        run: node --test scripts/e2e-apk.test.mjs
       - name: Install locked dependencies
         run: npm ci
       - name: Generate native project from this checkout
@@ -46,8 +51,50 @@ jobs:
       - name: Build emulator APK from this checkout
         working-directory: android
         # Previous run exhausted the Expo template's 512 MiB Metaspace during lint.
-        # Bound concurrency and retain lint; emulator starts only after Gradle exits.
+        # Bound concurrency and retain lint; emulator uses a separate runner.
         run: ./gradlew :app:assembleRelease -PreactNativeArchitectures=x86_64 '-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=1536m -Dfile.encoding=UTF-8' -Dorg.gradle.parallel=false --no-daemon --max-workers=1
+      - name: Bind APK to exact checkout
+        run: |
+          mkdir -p artifacts/apk
+          cp android/app/build/outputs/apk/release/app-release.apk artifacts/apk/app-release.apk
+          node scripts/e2e-apk.mjs seal artifacts/apk "$(git rev-parse HEAD)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk-${{ github.sha }}
+          path: artifacts/apk/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+      - name: Measure disk after build
+        if: always()
+        run: df -h . "$RUNNER_TEMP"
+
+  android-maestro:
+    needs: android-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    env:
+      CI: "1"
+      MAESTRO_CLI_NO_ANALYTICS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      # Default download scope is this workflow run, never another run's latest APK.
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-apk-${{ github.sha }}
+          path: artifacts/apk/
+      - name: Verify exact checkout and APK digest
+        run: node scripts/e2e-apk.mjs verify artifacts/apk "$(git rev-parse HEAD)"
+      - name: Measure disk before emulator
+        run: df -h . "$RUNNER_TEMP"
       - name: Install pinned Maestro CLI
         shell: bash
         run: |
@@ -72,9 +119,12 @@ jobs:
           target: google_apis
           disable-animations: true
           script: |
-            adb install -r android/app/build/outputs/apk/release/app-release.apk
+            adb install -r artifacts/apk/app-release.apk
             mkdir -p artifacts/maestro
             maestro test -e APP_ID=com.workcube.meeting --format junit --output artifacts/maestro/results.xml --debug-output artifacts/maestro .maestro/
+      - name: Measure disk after emulator
+        if: always()
+        run: df -h . "$RUNNER_TEMP"
       - name: Preserve test evidence
         if: always()
         uses: actions/upload-artifact@v4
@@ -82,6 +132,7 @@ jobs:
           name: android-maestro-${{ github.sha }}
           path: |
             artifacts/maestro/
+            artifacts/apk/manifest.json
             *-success.png
             transcript-revised-demo.png
           if-no-files-found: warn
