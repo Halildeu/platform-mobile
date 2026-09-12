@@ -25,6 +25,24 @@ import { useTranslation } from 'react-i18next';
 
 import type { TranscriptLine } from './transcriptState';
 
+/** Presentation only: keep original sequence IDs for corrections and replay. */
+export function transcriptParagraphs(lines: readonly TranscriptLine[]): TranscriptLine[][] {
+  const paragraphs: TranscriptLine[][] = [];
+  let current: TranscriptLine[] = [];
+  let length = 0;
+  for (const line of lines) {
+    current.push(line);
+    length += line.text.length;
+    if ((line.status === 'final' || line.status === 'revised') && (/[.!?…][”"')]*$/.test(line.text.trim()) || length >= 400)) {
+      paragraphs.push(current);
+      current = [];
+      length = 0;
+    }
+  }
+  if (current.length) paragraphs.push(current);
+  return paragraphs;
+}
+
 export interface TranscriptViewProps {
   lines: readonly TranscriptLine[];
   /** Otomatik-kaydırma özelliğini tümden kapatmak için false. Varsayılan açık. */
@@ -39,7 +57,8 @@ export function TranscriptView({
   autoScroll = true,
 }: TranscriptViewProps) {
   const { t } = useTranslation();
-  const listRef = useRef<FlatList<TranscriptLine>>(null);
+  const listRef = useRef<FlatList<TranscriptLine[]>>(null);
+  const paragraphs = transcriptParagraphs(lines);
   // Kullanıcı en altta "yapışık" mı — yukarı kaydırınca false olur, geri dönünce true.
   const [pinnedToBottom, setPinnedToBottom] = useState(true);
 
@@ -75,19 +94,21 @@ export function TranscriptView({
     <FlatList
       testID="transcript-list"
       ref={listRef}
-      data={lines as TranscriptLine[]}
-      keyExtractor={(line) => String(line.seq)}
+      data={paragraphs}
+      keyExtractor={(paragraph) => String(paragraph[0].seq)}
       contentContainerStyle={styles.content}
       onScroll={onScroll}
       onContentSizeChange={() => { if (autoScroll && pinnedToBottom) listRef.current?.scrollToEnd({ animated: true }); }}
       scrollEventThrottle={16}
       renderItem={({ item }) => (
         <View style={styles.row}>
-          <Text style={[styles.text, styles[item.status]]}>{item.text}</Text>
-          {item.status === 'stabilizing' && <Text style={styles.revisedTag}> · {t('transcript.stabilizingTag')}</Text>}
-          {item.status === 'revised' ? (
-            <Text style={styles.revisedTag}> · {t('transcript.revisedTag')}</Text>
-          ) : null}
+          <Text style={styles.text}>{item.map((line, index) => (
+            <Text key={line.seq} style={styles[line.status]}>
+              {index > 0 && !/^[,.;:!?…]/.test(line.text) ? ' ' : ''}{line.text}
+            </Text>
+          ))}</Text>
+          {item.some(line => line.status === 'stabilizing') && <Text style={styles.revisedTag}> · {t('transcript.stabilizingTag')}</Text>}
+          {item.some(line => line.status === 'revised') && <Text style={styles.revisedTag}> · {t('transcript.revisedTag')}</Text>}
         </View>
       )}
     />

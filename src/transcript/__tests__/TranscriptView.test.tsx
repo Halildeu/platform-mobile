@@ -1,7 +1,22 @@
 import { fireEvent, render } from '@testing-library/react-native';
-import { TranscriptView } from '../TranscriptView';
+import { TranscriptView, transcriptParagraphs } from '../TranscriptView';
 jest.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 const lines = [{ seq: 0, text: 'Merhaba', confirmed: 'Merhaba', tentative: '', status: 'stabilizing' as const }];
+
+it('groups word fragments without losing sequence IDs or revised content', () => {
+  const fragments = ['Sunumu', 'Zeynep', 'hazırlayacak.', 'Yarın'].map((text, seq) => ({
+    seq, text, confirmed: text, tentative: '', status: 'final' as const,
+  }));
+  expect(transcriptParagraphs(fragments).map(p => p.map(line => line.seq))).toEqual([[0, 1, 2], [3]]);
+  const revised = fragments.map(line => line.seq === 1 ? { ...line, text: 'Ayşe', status: 'revised' as const } : line);
+  expect(transcriptParagraphs(revised)[0][1].text).toBe('Ayşe');
+  expect(fragments[1].text).toBe('Zeynep');
+});
+
+it('keeps unfinished drafts together and handles an empty transcript', () => {
+  expect(transcriptParagraphs([])).toEqual([]);
+  expect(transcriptParagraphs([...lines, { ...lines[0], seq: 1, text: 'dünya' }])).toHaveLength(1);
+});
 
 it('allows manual scroll and an explicit return to live text', () => {
   const screen = render(<TranscriptView lines={lines} />);
