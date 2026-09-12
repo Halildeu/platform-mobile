@@ -14,7 +14,7 @@ jest.mock('../liveTestApi', () => ({ login: jest.fn(), meetings: jest.fn(), begi
 jest.mock('../../transcript/TranscriptView', () => ({ TranscriptView: ({ lines }: { lines: { text: string }[] }) => <MockText>{lines.map(l => l.text).join(' ')}</MockText> }));
 jest.mock('../../analysis/LiveAnalysisPanel', () => ({ LiveAnalysisPanel: ({ snapshot }: { snapshot: { summary: string } | null }) => <MockText>{snapshot?.summary}</MockText> }));
 jest.mock('../../analysis/analysisSubscription', () => ({ subscribeAnalysis: (options: { onSnapshot: typeof mockSnapshot }) => { mockSnapshot = options.onSnapshot; return jest.fn(); } }));
-jest.mock('../foregroundStream', () => ({ ForegroundStream: jest.fn().mockImplementation((_socket, ready, text) => { mockText = text; ready(); return { stop: async () => true, dispose: jest.fn() }; }) }));
+jest.mock('../foregroundStream', () => ({ ForegroundStream: jest.fn().mockImplementation((_socket, ready, text) => { mockText = text; ready(); return { stop: async () => true, dispose: jest.fn(), diagnostics: () => ({}) }; }) }));
 
 beforeEach(() => {
   jest.clearAllMocks();
