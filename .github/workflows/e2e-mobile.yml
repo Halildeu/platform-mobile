@@ -22,6 +22,7 @@ on:
       - "package*.json"
       - "babel.config.js"
       - "scripts/e2e-apk*"
+      - "scripts/e2e-maestro*"
       - ".github/workflows/e2e-mobile.yml"
 
 permissions:
@@ -53,7 +54,7 @@ jobs:
           java-version: "17"
       - uses: android-actions/setup-android@v3
       - name: Test artifact handoff guard
-        run: node --test scripts/e2e-apk.test.mjs
+        run: node --test scripts/e2e-apk.test.mjs scripts/e2e-maestro.test.mjs
       - name: Install locked dependencies
         run: npm ci
       - name: Generate native project from this checkout
@@ -130,10 +131,7 @@ jobs:
           arch: x86_64
           target: google_apis
           disable-animations: true
-          script: |
-            adb install -r artifacts/apk/app-release.apk
-            mkdir -p artifacts/maestro
-            maestro test -e APP_ID=com.workcube.meeting --format junit --output artifacts/maestro/results.xml --debug-output artifacts/maestro --test-output-dir artifacts/maestro .maestro/
+          script: node scripts/e2e-maestro.mjs
       - name: Require both successful-flow screenshots
         run: |
           test -n "$(find artifacts/maestro -type f -name '*app-launch-success*.png' -print -quit)"
@@ -145,7 +143,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: android-maestro-${{ github.sha }}
+          name: android-maestro-${{ github.sha }}-attempt-${{ github.run_attempt }}
           path: |
             artifacts/maestro/
             artifacts/apk/manifest.json
