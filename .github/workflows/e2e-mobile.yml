@@ -35,6 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
+      APK_ARCH: ${{ inputs.target == 'device' && 'arm64-v8a' || 'x86_64' }}
       CI: "1"
       EXPO_NO_TELEMETRY: "1"
       MAESTRO_CLI_NO_ANALYTICS: "1"
@@ -61,12 +62,13 @@ jobs:
         working-directory: android
         # Previous run exhausted the Expo template's 512 MiB Metaspace during lint.
         # Bound concurrency and retain lint; emulator uses a separate runner.
-        run: ./gradlew :app:assembleRelease -PreactNativeArchitectures=${{ inputs.target == 'device' && 'arm64-v8a' || 'x86_64' }} '-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=1536m -Dfile.encoding=UTF-8' -Dorg.gradle.parallel=false --no-daemon --max-workers=1
+        run: ./gradlew :app:assembleRelease -PreactNativeArchitectures="$APK_ARCH" '-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=1536m -Dfile.encoding=UTF-8' -Dorg.gradle.parallel=false --no-daemon --max-workers=1
       - name: Bind APK to exact checkout
         run: |
           mkdir -p artifacts/apk
           cp android/app/build/outputs/apk/release/app-release.apk artifacts/apk/app-release.apk
-          node scripts/e2e-apk.mjs seal artifacts/apk "$(git rev-parse HEAD)"
+          node scripts/e2e-apk.mjs seal artifacts/apk "$(git rev-parse HEAD)" "$APK_ARCH"
+          node scripts/e2e-apk.mjs verify artifacts/apk "$(git rev-parse HEAD)" "$APK_ARCH"
       - uses: actions/upload-artifact@v4
         with:
           name: android-${{ inputs.target == 'device' && 'device' || 'emulator' }}-apk-${{ github.sha }}
@@ -102,7 +104,7 @@ jobs:
           name: android-emulator-apk-${{ github.sha }}
           path: artifacts/apk/
       - name: Verify exact checkout and APK digest
-        run: node scripts/e2e-apk.mjs verify artifacts/apk "$(git rev-parse HEAD)"
+        run: node scripts/e2e-apk.mjs verify artifacts/apk "$(git rev-parse HEAD)" x86_64
       - name: Measure disk before emulator
         run: df -h . "$RUNNER_TEMP"
       - name: Install pinned Maestro CLI
