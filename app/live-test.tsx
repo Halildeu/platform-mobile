@@ -309,12 +309,13 @@ export default function LiveTestScreen() {
     <Text style={styles.text}>{status}</Text>
     {recording && <Text accessibilityRole="alert" style={styles.recording}>● Mikrofon açık · Kayıt sürüyor</Text>}
     <Pressable accessibilityRole="button" onPress={() => setSetup(!setup)}><Text style={styles.selected}>{setup ? 'Toplantı ayarlarını gizle' : 'Toplantı seç / ayarlar'}</Text></Pressable>
-    {setup && <ScrollView style={{ maxHeight: 200 }}>
+    {setup && <View>
     <Text style={styles.note}>{background ? `Arka planda kayıt açık. Kaydı uygulamadan${Platform.OS === 'android' ? ' veya kayıt bildiriminden' : ''} durdurabilirsiniz. Bu deneme 60 saniyedir.` : 'Bu kısa denemede ekran açık kalmalıdır.'} Kısa ağ kesintisinde yeniden bağlanmayı dener; düzelmezse test durur.</Text>
-    {supportsBackgroundCapture() && <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+    {supportsBackgroundCapture() && <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
       <Text style={styles.note}>Ekran kapalıyken kayda devam et</Text>
       <Switch accessibilityLabel="Arka planda kayıt" value={background} disabled={busy || recording} onValueChange={setBackground} />
     </View>}
+    <ScrollView style={{ maxHeight: 150 }}>
     <Pressable accessibilityState={{ disabled: busy || recording }} disabled={busy || recording} style={[styles.button, (busy || recording) && styles.disabled]} onPress={() => void signIn()}><Text style={styles.text}>Giriş yap</Text></Pressable>
     <Pressable disabled={busy || recording} style={[styles.button, (busy || recording) && styles.disabled]} onPress={() => void signOut()}><Text style={styles.text}>Çıkış yap</Text></Pressable>
     <View>
@@ -325,7 +326,7 @@ export default function LiveTestScreen() {
       {list.map((meeting) => <Pressable key={meeting.id} disabled={busy || recording} onPress={() => selectMeeting(meeting.id)}>
         <Text style={[styles.text, selected === meeting.id && styles.selected]}>{selected === meeting.id ? '✓ ' : ''}{meeting.title}</Text>
       </Pressable>)}
-    </View></ScrollView>}
+    </View></ScrollView></View>}
     <Pressable accessibilityState={{ disabled: !selected || busy || recording }} disabled={!selected || busy || recording} style={[styles.button, (!selected || busy || recording) && styles.disabled]} onPress={() => Alert.alert('Konuşma testi', api.CONSENT,
       [{ text: 'Vazgeç' }, { text: 'Kabul et ve başlat', onPress: () => { setSetup(false); setTab('text'); void start(); } }])}><Text style={styles.text}>Konuşma testini başlat</Text></Pressable>
     <Pressable disabled={!recording && !busy} style={[styles.button, (!recording && !busy) && styles.disabled]} onPress={() => void stop()}><Text style={styles.text}>Durdur</Text></Pressable>
