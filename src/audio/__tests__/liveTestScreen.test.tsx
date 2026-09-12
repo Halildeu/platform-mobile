@@ -6,6 +6,7 @@ import * as api from '../liveTestApi';
 const mockStart = jest.fn().mockResolvedValue(undefined);
 const mockStop = jest.fn();
 const mockPermission = jest.fn();
+const mockDrain = jest.fn();
 let mockFailure: (message: string) => void;
 jest.mock('expo-audio', () => ({
   AudioModule: { requestRecordingPermissionsAsync: (...args: unknown[]) => mockPermission(...args) },
@@ -24,12 +25,13 @@ jest.mock('../../analysis/LiveAnalysisPanel', () => ({ LiveAnalysisPanel: () => 
 jest.mock('../foregroundStream', () => ({ ForegroundStream: jest.fn().mockImplementation(
   (_socket, _ready, _text, failure) => {
     mockFailure = failure;
-    return { stop: jest.fn().mockResolvedValue(false), dispose: jest.fn() };
+    return { stop: mockDrain, dispose: jest.fn() };
   }),
 }));
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockDrain.mockResolvedValue(false);
   jest.mocked(api.login).mockResolvedValue({ jwt: 'test-only', expiresAt: Date.now() + 600000 });
   jest.mocked(api.validSession).mockResolvedValue({ jwt: 'test-only', expiresAt: Date.now() + 600000 });
   jest.mocked(api.restoreSession).mockResolvedValue(null);
@@ -73,6 +75,18 @@ it('keeps the connection failure visible after asynchronous cleanup', async () =
   await act(async () => { mockFailure('Ses sunucusu hazır olmadı.'); });
   expect(screen.getByText('Ses sunucusu hazır olmadı.')).toBeTruthy();
   expect(screen.queryByText('Test durdu; son sözlerin tamamlandığı doğrulanamadı.')).toBeNull();
+});
+
+it('does not show successful stop when finish validation fails after a drained stream', async () => {
+  mockPermission.mockResolvedValue({ granted: true });
+  mockDrain.mockResolvedValue(true);
+  jest.mocked(api.finish).mockRejectedValueOnce(new Error('Kayıt kapanışı doğrulanamadı.'));
+  const screen = await openAndStart();
+  await waitFor(() => expect(api.begin).toHaveBeenCalled());
+  await act(async () => { fireEvent.press(screen.getByText('Durdur')); });
+  expect(api.finish).toHaveBeenCalledWith('test-only', 'session-1');
+  expect(screen.getByText('Test durdu; sunucudaki kapanış doğrulanamadı.')).toBeTruthy();
+  expect(screen.queryByText('Test bitti. Ekrandaki metni konuşmanızla karşılaştırabilirsiniz.')).toBeNull();
 });
 
 it('restores meetings without interactive login and clears them on logout', async () => {

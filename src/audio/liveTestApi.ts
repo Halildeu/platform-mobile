@@ -131,5 +131,12 @@ export async function begin(jwt: string, meetingId: string, onStage?: (stage: st
 }
 
 export async function finish(jwt: string, sessionId: string): Promise<void> {
-  await request(`/api/v1/audio-gateway/sessions/${encodeURIComponent(sessionId)}/finish`, jwt, {}, `${sessionId}:mobile-finish`);
+  const result = await request(`/api/v1/audio-gateway/sessions/${encodeURIComponent(sessionId)}/finish`, jwt, {}, `${sessionId}:mobile-finish`);
+  // A terminal gateway acknowledgement is not proof of a persisted analysis result.
+  if (!result || typeof result !== 'object' || Array.isArray(result)
+    || result.sessionId !== sessionId || result.finalState !== 'FINISHED'
+    || typeof result.finishedAtMs !== 'number' || !Number.isSafeInteger(result.finishedAtMs)
+    || result.finishedAtMs < 0 || typeof result.alreadyFinished !== 'boolean') {
+    throw new Error('Kayıt kapanışı doğrulanamadı.');
+  }
 }

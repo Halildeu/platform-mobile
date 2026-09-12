@@ -1,6 +1,6 @@
 import { NativeModule, requireNativeModule } from 'expo';
 
-declare class WorkcubePcmBackgroundModule extends NativeModule<{}> {
+declare class WorkcubePcmBackgroundModule extends NativeModule {
   isAvailable(): boolean;
   start(): Promise<void>;
   stop(): void;
