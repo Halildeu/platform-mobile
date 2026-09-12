@@ -51,7 +51,6 @@
     },
     "plugins": [
       "expo-router",
-      "./plugins/withPcmBackground.cjs",
       "expo-secure-store",
       ["expo-sqlite", { "useSQLCipher": true }],
       "expo-notifications",

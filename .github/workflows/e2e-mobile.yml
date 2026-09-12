@@ -2,6 +2,15 @@ name: E2E — Android Maestro
 
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: "APK hedefi"
+        required: false
+        default: "emulator"
+        type: choice
+        options:
+          - emulator
+          - device
   pull_request:
     paths:
       - "app/**"
@@ -48,11 +57,11 @@ jobs:
         run: npm ci
       - name: Generate native project from this checkout
         run: npx expo prebuild --platform android --no-install
-      - name: Build emulator APK from this checkout
+      - name: Build APK from this checkout
         working-directory: android
         # Previous run exhausted the Expo template's 512 MiB Metaspace during lint.
         # Bound concurrency and retain lint; emulator uses a separate runner.
-        run: ./gradlew :app:assembleRelease -PreactNativeArchitectures=x86_64 '-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=1536m -Dfile.encoding=UTF-8' -Dorg.gradle.parallel=false --no-daemon --max-workers=1
+        run: ./gradlew :app:assembleRelease -PreactNativeArchitectures=${{ inputs.target == 'device' && 'arm64-v8a' || 'x86_64' }} '-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=1536m -Dfile.encoding=UTF-8' -Dorg.gradle.parallel=false --no-daemon --max-workers=1
       - name: Bind APK to exact checkout
         run: |
           mkdir -p artifacts/apk
@@ -60,7 +69,7 @@ jobs:
           node scripts/e2e-apk.mjs seal artifacts/apk "$(git rev-parse HEAD)"
       - uses: actions/upload-artifact@v4
         with:
-          name: android-apk-${{ github.sha }}
+          name: android-${{ inputs.target == 'device' && 'device' || 'emulator' }}-apk-${{ github.sha }}
           path: artifacts/apk/
           if-no-files-found: error
           compression-level: 0
@@ -70,6 +79,7 @@ jobs:
         run: df -h . "$RUNNER_TEMP"
 
   android-maestro:
+    if: ${{ inputs.target != 'device' }}
     needs: build-android-apk
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -89,7 +99,7 @@ jobs:
       # Default download scope is this workflow run, never another run's latest APK.
       - uses: actions/download-artifact@v4
         with:
-          name: android-apk-${{ github.sha }}
+          name: android-emulator-apk-${{ github.sha }}
           path: artifacts/apk/
       - name: Verify exact checkout and APK digest
         run: node scripts/e2e-apk.mjs verify artifacts/apk "$(git rev-parse HEAD)"
