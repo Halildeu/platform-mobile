@@ -38,6 +38,7 @@ export default function LiveTestScreen() {
   const [analysis, setAnalysis] = useState<AnalysisSnapshot | null>(null);
   const [analysisStatus, setAnalysisStatus] = useState('Kayıt başladığında canlı analiz beklenecek.');
   const stopAnalysis = useRef<(() => void) | null>(null);
+  const analysisReceived = useRef(false);
   const token = useRef<Awaited<ReturnType<typeof api.login>> | null>(null);
   const live = useRef<ForegroundStream | null>(null);
   const session = useRef<string | null>(null);
@@ -62,10 +63,7 @@ export default function LiveTestScreen() {
     active.current = false;
     captureStarted.current = false;
     backgroundActive.current = false;
-    generation.current++;
-    stopAnalysis.current?.(); stopAnalysis.current = null;
     clearTimeout(stopTimer.current);
-    setAnalysisStatus('Test durdu; canlı analiz bağlantısı kapatıldı.');
     stream.stop();
     setRecording(false);
     setBusy(true);
@@ -78,9 +76,20 @@ export default function LiveTestScreen() {
     try {
       const drained = await connection?.stop();
       if (id && token.current) { token.current = await api.validSession(15000); await api.finish(token.current.jwt, id); }
+      if (!failure.current && stopAnalysis.current && !analysisReceived.current) {
+        setStatus('Ses kaydı bitti; analiz sonucu en fazla 20 saniye bekleniyor…');
+        setAnalysisStatus('Son metin parçaları işlendi; analiz sonucu bekleniyor.');
+        await new Promise<void>(resolve => setTimeout(resolve, 20_000));
+      }
       setStatus(failure.current ?? (drained ? 'Test bitti. Ekrandaki metni konuşmanızla karşılaştırabilirsiniz.' : 'Test durdu; son sözlerin tamamlandığı doğrulanamadı.'));
     } catch { setStatus(failure.current ?? 'Test durdu; sunucudaki kapanış doğrulanamadı.'); }
     finally {
+      generation.current++;
+      stopAnalysis.current?.(); stopAnalysis.current = null;
+      if (!analysisReceived.current && !failure.current) {
+        setAnalysisStatus('Canlı analiz sonucu gelmedi. Tanılama kaydındaki analiz aşamasını sunucu kaydıyla eşleştirin.');
+        setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | Canlı analiz sonucu 20 saniyede gelmedi`].slice(-30));
+      }
       if (failure.current) setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | ${failure.current}`].slice(-30));
       connection?.dispose();
       void configureBackgroundCapture(false).catch(() => {});
@@ -155,6 +164,7 @@ export default function LiveTestScreen() {
     setBusy(true);
     token.current = null; setSignedIn(false); setList([]); setSelected(undefined);
     setLines([]); setAnalysis(null); setDiagnostics([]);
+    analysisReceived.current = false;
     stopAnalysis.current?.(); stopAnalysis.current = null;
     try {
       const serverConfirmed = await api.logout();
@@ -252,9 +262,10 @@ export default function LiveTestScreen() {
       session.current = id;
       setDiagnostics((previous) => [...previous, `Ses oturumu: ${id}`].slice(-30));
       markStage('Ses bağlantısının açılması');
+      analysisReceived.current = false;
       stopAnalysis.current = subscribeAnalysis({ baseUrl: api.BASE_URL, meetingId: selected, token: token.current.jwt,
-        onSnapshot: (snapshot) => { if (generation.current === run) setAnalysis((previous) => newerAnalysis(previous, snapshot)); },
-        onStatus: (message) => { if (generation.current === run) setAnalysisStatus(message); },
+        onSnapshot: (snapshot) => { if (generation.current === run) { analysisReceived.current = true; setAnalysis((previous) => newerAnalysis(previous, snapshot)); } },
+        onStatus: (message) => { if (generation.current === run) { setAnalysisStatus(message); setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | Analiz: ${message}`].slice(-30)); } },
       });
       const NativeWebSocket = WebSocket as unknown as new (url: string, protocols: string[] | undefined, options: { headers: Record<string, string> }) => LiveSocket;
       const socket = new NativeWebSocket(`${api.BASE_URL.replace('https:', 'wss:')}/api/v1/audio-gateway/sessions/${encodeURIComponent(id)}/stream`, undefined,
