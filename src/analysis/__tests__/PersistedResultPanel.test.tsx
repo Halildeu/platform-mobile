@@ -25,3 +25,13 @@ test('late response cannot restore the previous meeting and duplicate taps are s
   expect(screen.queryByText('Kalıcı özet')).toBeNull();
   expect(screen.getByText('Kalıcı sonucu aç / yenile')).toBeTruthy();
 });
+test('does not label an epoch source timestamp as recording-relative seconds', async () => {
+  const value = result('A');
+  value.sources[0].startSec = 1789046520.809;
+  const screen = render(<PersistedResultPanel meetingId="A" load={async () => value} />);
+  await act(async () => fireEvent.press(screen.getByText('Kalıcı sonucu aç / yenile')));
+  fireEvent.press(screen.getByText('Kaynakları göster'));
+  expect(screen.queryByText('Kayıtta 1789046520.809. saniye')).toBeNull();
+  expect(screen.getByText('Kaynak 1')).toBeTruthy();
+  expect(screen.getByText('Kaynak alıntısı')).toBeTruthy();
+});

@@ -186,10 +186,19 @@ export default function LiveTestScreen() {
     try {
       token.current = await api.validSession();
       const next = await api.meetings(token.current.jwt);
-      setList(next); setSelected((current) => next.some(item => item.id === current) ? current : undefined);
+      setList(next);
+      if (!next.some(item => item.id === selected)) selectMeeting(undefined);
       setStatus('Toplantı listesi yenilendi.');
     } catch (error) { setStatus(error instanceof Error ? error.message : 'Toplantı listesi yenilenemedi.'); }
     finally { setBusy(false); }
+  }
+
+  function selectMeeting(id: string | undefined) {
+    if (id === selected) return;
+    generation.current++;
+    stopAnalysis.current?.(); stopAnalysis.current = null;
+    setSelected(id); setLines([]); setAnalysis(null); setDiagnostics([]);
+    setAnalysisStatus('Kayıt başladığında canlı analiz beklenecek.');
   }
 
   async function createMeeting(title: string) {
@@ -198,7 +207,7 @@ export default function LiveTestScreen() {
       token.current = await api.validSession();
       const meeting = await api.createMeeting(token.current.jwt, title);
       setList(previous => [meeting, ...previous.filter(item => item.id !== meeting.id)]);
-      setSelected(meeting.id); setLines([]); setAnalysis(null);
+      selectMeeting(meeting.id);
       setStatus('Yeni toplantı oluşturuldu ve seçildi. Konuşma testini başlatabilirsiniz.');
     } catch (error) {
       setStatus(`${error instanceof Error ? error.message : 'Toplantı oluşturma sonucu alınamadı.'}\nTekrar oluşturmadan önce listeyi yenileyin; ilk istek kaydedilmiş olabilir.`);
@@ -313,7 +322,7 @@ export default function LiveTestScreen() {
         <NewMeetingForm disabled={busy || recording} onCreate={createMeeting} />
         <Pressable accessibilityRole="button" disabled={busy || recording} onPress={() => void refreshMeetings()}><Text style={styles.text}>Listeyi yenile</Text></Pressable>
       </>}
-      {list.map((meeting) => <Pressable key={meeting.id} disabled={busy || recording} onPress={() => setSelected(meeting.id)}>
+      {list.map((meeting) => <Pressable key={meeting.id} disabled={busy || recording} onPress={() => selectMeeting(meeting.id)}>
         <Text style={[styles.text, selected === meeting.id && styles.selected]}>{selected === meeting.id ? '✓ ' : ''}{meeting.title}</Text>
       </Pressable>)}
     </View></ScrollView>}
