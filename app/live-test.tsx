@@ -315,6 +315,7 @@ export default function LiveTestScreen() {
       <Text style={styles.note}>Ekran kapalıyken kayda devam et</Text>
       <Switch accessibilityLabel="Arka planda kayıt" value={background} disabled={busy || recording} onValueChange={setBackground} />
     </View>}
+    {Platform.OS === 'android' && !supportsBackgroundCapture() && <Text style={styles.note}>Arka plan kaydı bu APK’da hazır değil. Uygulama ekran açıkken kayıt yapabilir.</Text>}
     <ScrollView style={{ maxHeight: 150 }}>
     <Pressable accessibilityState={{ disabled: busy || recording }} disabled={busy || recording} style={[styles.button, (busy || recording) && styles.disabled]} onPress={() => void signIn()}><Text style={styles.text}>Giriş yap</Text></Pressable>
     <Pressable disabled={busy || recording} style={[styles.button, (busy || recording) && styles.disabled]} onPress={() => void signOut()}><Text style={styles.text}>Çıkış yap</Text></Pressable>

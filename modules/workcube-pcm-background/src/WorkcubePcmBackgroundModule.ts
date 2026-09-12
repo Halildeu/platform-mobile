@@ -6,4 +6,12 @@ declare class WorkcubePcmBackgroundModule extends NativeModule<{}> {
   stop(): void;
 }
 
-export default requireNativeModule<WorkcubePcmBackgroundModule>('WorkcubePcmBackground');
+let nativeModule: WorkcubePcmBackgroundModule | null = null;
+try {
+  nativeModule = requireNativeModule<WorkcubePcmBackgroundModule>('WorkcubePcmBackground');
+} catch {
+  // A missing native module must never blank the meeting screen. The caller
+  // exposes the unavailable state and refuses background capture.
+}
+
+export default nativeModule;
