@@ -46,15 +46,29 @@ it.each([
   } finally { fetchMock.mockRestore(); }
 });
 
-it('requests realtime mode instead of the server balanced default', async () => {
+it('requests and verifies Speechmatics realtime before starting capture', async () => {
   const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValueOnce({
     ok: true, json: async () => ({ meetingId: 'meeting-1', captureId: requestId, consentTextHash: 'sha256:test-hash' }),
-  } as Response).mockResolvedValueOnce({ ok: true, json: async () => ({ sessionId: 'session-1' }) } as Response);
+  } as Response).mockResolvedValueOnce({ ok: true, json: async () => ({ sessionId: 'session-1', sttProvider: 'speechmatics', transcriptionMode: 'realtime' }) } as Response);
   try {
     await expect(begin('fake-token', 'meeting-1')).resolves.toBe('session-1');
     const body = JSON.parse(fetchMock.mock.calls[1][1]?.body as string);
     expect(body).toMatchObject({ transcriptionMode: 'realtime', audioFormat: 'PCM16', sampleRateHz: 16000, channels: 1 });
-    expect(body.sttProvider).toBeUndefined();
+    expect(body.sttProvider).toBe('speechmatics');
+  } finally { fetchMock.mockRestore(); }
+});
+
+it.each([
+  { sttProvider: 'internal', transcriptionMode: 'realtime' },
+  { sttProvider: 'speechmatics', transcriptionMode: 'balanced' },
+  {},
+])('rejects an unconfirmed provider/mode without retrying: %j', async (selection) => {
+  const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValueOnce({
+    ok: true, json: async () => ({ meetingId: 'meeting-1', captureId: requestId, consentTextHash: 'sha256:test-hash' }),
+  } as Response).mockResolvedValueOnce({ ok: true, json: async () => ({ sessionId: 'session-1', ...selection }) } as Response);
+  try {
+    await expect(begin('fake-token', 'meeting-1')).rejects.toThrow('Speechmatics canlı ses seçimi sunucu tarafından doğrulanmadı');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   } finally { fetchMock.mockRestore(); }
 });
 

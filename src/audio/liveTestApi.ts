@@ -122,11 +122,15 @@ export async function begin(jwt: string, meetingId: string, onStage?: (stage: st
   const session = await request('/api/v1/audio-gateway/sessions', jwt, {
     meetingId, deviceId: 'mobile-foreground-test', language: 'tr',
     audioFormat: 'PCM16', sampleRateHz: 16000, channels: 1,
-    transcriptionMode: 'realtime',
+    sttProvider: 'speechmatics', transcriptionMode: 'realtime',
   }, captureId);
   if (typeof session.sessionId !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(session.sessionId)) {
     throw new Error('Ses oturumu doğrulanamadı.');
   }
+  if (session.sttProvider !== 'speechmatics' || session.transcriptionMode !== 'realtime') {
+    throw new Error('Speechmatics canlı ses seçimi sunucu tarafından doğrulanmadı. Kayıt başlatılmadı.');
+  }
+  onStage?.('Ses sağlayıcısı doğrulandı: Speechmatics (canlı)');
   return session.sessionId;
 }
 
