@@ -16,6 +16,7 @@ import { LiveAnalysisPanel } from '../src/analysis/LiveAnalysisPanel';
 import { newerAnalysis, type AnalysisSnapshot } from '../src/analysis/liveAnalysis';
 import { subscribeAnalysis } from '../src/analysis/analysisSubscription';
 import { PersistedResultPanel } from '../src/analysis/PersistedResultPanel';
+import { saveMeetingView, readMeetingView, clearMeetingViews } from '../src/audio/meetingViewCache';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -47,6 +48,9 @@ export default function LiveTestScreen() {
   const permissionPending = useRef(false);
   const failure = useRef<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<string[]>([]);
+  useEffect(() => {
+    if (selected && signedIn) saveMeetingView(selected, { lines, analysis, diagnostics });
+  }, [selected, signedIn, lines, analysis, diagnostics]);
   const stage = useRef('Başlatma');
   const diagnosticTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const analysisCount = useRef(0);
@@ -177,6 +181,7 @@ export default function LiveTestScreen() {
   }, [signedIn, busy, recording]);
 
   async function signOut() {
+    clearMeetingViews();
     setBusy(true);
     token.current = null; setSignedIn(false); setList([]); setSelected(undefined);
     setLines([]); setAnalysis(null); setDiagnostics([]);
@@ -190,6 +195,7 @@ export default function LiveTestScreen() {
   }
 
   async function signIn() {
+    clearMeetingViews();
     token.current = null;
     setSignedIn(false);
     setList([]); setSelected(undefined); setLines([]); setAnalysis(null);
@@ -223,8 +229,10 @@ export default function LiveTestScreen() {
     if (id === selected) return;
     generation.current++;
     stopAnalysis.current?.(); stopAnalysis.current = null;
-    setSelected(id); setLines([]); setAnalysis(null); setDiagnostics([]);
-    setAnalysisStatus('Kayıt başladığında canlı analiz beklenecek.');
+    const cached = id ? readMeetingView(id) : undefined;
+    setSelected(id); setLines(cached?.lines ?? []); setAnalysis(cached?.analysis ?? null); setDiagnostics(cached?.diagnostics ?? []);
+    setTab('saved');
+    setAnalysisStatus(cached?.analysis ? 'Önceki canlı taslak geri getirildi; kalıcı sonuç Kaydedilen bölümünden doğrulanmalıdır.' : 'Bu ekranda canlı taslak yok; kaydedilmiş sonuç sunucudan kontrol ediliyor.');
   }
 
   async function createMeeting(title: string) {
@@ -249,6 +257,7 @@ export default function LiveTestScreen() {
     analysisCount.current = 0;
     setDiagnostics([`Mobil tanılama v2 | Deneme: ${Crypto.randomUUID()} | UTC: ${new Date().toISOString()} | Toplantı: ${selected}`, 'Otomatik süre sınırı yok. Ham ses, konuşma içeriği ve token rapora dahil edilmez. Uygulama zorla kapatılırsa son olay kaydedilemeyebilir.']);
     const run = ++generation.current;
+    setTab('text');
     setBusy(true);
     setLines([]);
     setAnalysis(null);
@@ -281,7 +290,7 @@ export default function LiveTestScreen() {
       markStage('Ses bağlantısının açılması');
       analysisReceived.current = false;
       stopAnalysis.current = subscribeAnalysis({ baseUrl: api.BASE_URL, meetingId: selected, token: token.current.jwt,
-        onSnapshot: (snapshot) => { if (generation.current === run) { analysisCount.current++; log(`Analiz sonucu alındı: adet=${analysisCount.current}`); analysisReceived.current = true; setAnalysis((previous) => newerAnalysis(previous, snapshot)); } },
+        onSnapshot: (snapshot) => { if (generation.current === run) { analysisCount.current++; log(`Analiz sonucu alındı: adet=${analysisCount.current}`); analysisReceived.current = true; setAnalysisStatus('Canlı analiz sonucu alındı; yeni sonuçlar geldikçe güncellenecek.'); setAnalysis((previous) => newerAnalysis(previous, snapshot)); } },
         onStatus: (message) => { if (generation.current === run) { setAnalysisStatus(message); setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | Analiz: ${message}`].filter((_, index, all) => index < 3 || index >= all.length - 297)); } },
       });
       const NativeWebSocket = WebSocket as unknown as new (url: string, protocols: string[] | undefined, options: { headers: Record<string, string> }) => LiveSocket;

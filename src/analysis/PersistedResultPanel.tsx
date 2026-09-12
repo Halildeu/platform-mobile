@@ -16,6 +16,7 @@ function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic }: P
   const [sources, setSources] = useState(false);
   const lifecycle = useRef({ generation: 0 });
   const pending = useRef(false);
+  useEffect(() => { void refresh(); }, []);
   useEffect(() => {
     const instance = lifecycle.current;
     return () => { instance.generation++; };
