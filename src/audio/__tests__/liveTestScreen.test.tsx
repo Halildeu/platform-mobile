@@ -8,6 +8,7 @@ const mockStop = jest.fn();
 const mockPermission = jest.fn();
 const mockDrain = jest.fn();
 let mockFailure: (message: string) => void;
+let mockReady: () => void;
 jest.mock('expo-audio', () => ({
   AudioModule: { requestRecordingPermissionsAsync: (...args: unknown[]) => mockPermission(...args) },
   useAudioStream: () => ({ stream: { start: mockStart, stop: mockStop, sampleRate: 16000, channels: 1 } }),
@@ -25,7 +26,8 @@ jest.mock('../../analysis/LiveAnalysisPanel', () => ({ LiveAnalysisPanel: () => 
 jest.mock('../foregroundStream', () => ({ ForegroundStream: jest.fn().mockImplementation(
   (_socket, _ready, _text, failure) => {
     mockFailure = failure;
-    return { stop: mockDrain, dispose: jest.fn() };
+    mockReady = _ready;
+    return { stop: mockDrain, dispose: jest.fn(), diagnostics: () => ({}) };
   }),
 }));
 
@@ -87,6 +89,23 @@ it('does not show successful stop when finish validation fails after a drained s
   expect(api.finish).toHaveBeenCalledWith('test-only', 'session-1');
   expect(screen.getByText('Test durdu; sunucudaki kapanış doğrulanamadı.')).toBeTruthy();
   expect(screen.queryByText('Test bitti. Ekrandaki metni konuşmanızla karşılaştırabilirsiniz.')).toBeNull();
+  fireEvent.press(screen.getByText('Tanılama'));
+  expect(screen.getByText(/Durdurma nedeni: Kullanıcı ekrandaki Durdur düğmesine bastı/)).toBeTruthy();
+});
+
+it('keeps recording beyond the former 60 second limit', async () => {
+  mockPermission.mockResolvedValue({ granted: true });
+  const screen = await openAndStart();
+  await waitFor(() => expect(api.begin).toHaveBeenCalled());
+  jest.useFakeTimers();
+  try {
+    await act(async () => { mockReady(); });
+    await act(async () => { jest.advanceTimersByTime(120000); });
+    expect(mockStop).not.toHaveBeenCalled();
+    expect(mockDrain).not.toHaveBeenCalled();
+    expect(screen.getByText('Dinleniyor — konuşabilirsiniz. Bitirmek için Durdur düğmesine basın.')).toBeTruthy();
+    await act(async () => { mockFailure('Kontrollü test kapanışı'); });
+  } finally { jest.useRealTimers(); }
 });
 
 it('restores meetings without interactive login and clears them on logout', async () => {

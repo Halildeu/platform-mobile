@@ -32,6 +32,15 @@ export class ForegroundStream {
   private everReady = false;
   private connectionGeneration = 0;
   private retries = 0;
+  private telemetry = { capturedBuffers: 0, capturedBytes: 0, sentFrames: 0, acknowledgedFrames: 0,
+    lastSentSeq: -1, lastAckSeq: -1, partialEvents: 0, finalEvents: 0,
+    lastCaptureUtc: '', lastSendUtc: '', lastAckUtc: '', lastTextUtc: '',
+    eofUtc: '', drainedUtc: '', closeCode: 0 };
+
+  diagnostics() {
+    return { ...this.telemetry, generatedFrames: this.seq, pendingFrames: this.buffer?.pending() ?? 0,
+      deliveryReceiptsAvailable: !!this.buffer, reconnectAttempts: this.retries };
+  }
 
   constructor(
     private socket: LiveSocket,
@@ -65,6 +74,9 @@ export class ForegroundStream {
   }
 
   send(data: ArrayBuffer, sampleRate: number, channels: number, capturedAtMs: number): boolean {
+    this.telemetry.capturedBuffers++;
+    this.telemetry.capturedBytes += data.byteLength;
+    this.telemetry.lastCaptureUtc = new Date().toISOString();
     const recovering = !!this.recovery && !!this.buffer && this.everReady && (this.reconnecting || this.transportError);
     if ((!this.ready && !recovering) || this.stopping || this.finished || (this.transportError && !recovering)) return false;
     if (sampleRate !== 16000 || channels !== 1 || !data.byteLength || data.byteLength % 2 !== 0) {
@@ -88,7 +100,7 @@ export class ForegroundStream {
           if (this.waitingSince === undefined) this.waitingSince = Date.now();
           this.flushQueue();
           if (this.finished) return false;
-        } else this.socket.send(encodeGatewayLivePcm16Frame(chunk));
+        } else { this.socket.send(encodeGatewayLivePcm16Frame(chunk)); this.sent(chunk.chunkSeq); }
       }
       return true;
     } catch {
@@ -135,7 +147,7 @@ export class ForegroundStream {
   private sendEofWhenAcknowledged(): void {
     if (!this.stopping || this.finished || this.eofSent || (this.buffer?.pending() ?? 0) > 0) return;
     this.eofSent = true;
-    try { this.socket.send(JSON.stringify({ type: 'eof' })); }
+    try { this.socket.send(JSON.stringify({ type: 'eof' })); this.telemetry.eofUtc = new Date().toISOString(); }
     catch { this.fail('Son metin onayı alınamadı.'); }
   }
 
@@ -147,7 +159,7 @@ export class ForegroundStream {
     let sendFailed = false;
     this.buffer.drain((pending) => {
       if (this.socket.readyState !== 1 || this.socket.bufferedAmount > 128000) return false;
-      try { this.socket.send(encodeGatewayLivePcm16Frame(pending)); return true; }
+      try { this.socket.send(encodeGatewayLivePcm16Frame(pending)); this.sent(pending.chunkSeq); return true; }
       catch { sendFailed = true; return false; }
     });
     if (sendFailed) { this.fail('Ses gönderimi başarısız oldu; teslim onayı alınamadı.'); return; }
@@ -158,6 +170,7 @@ export class ForegroundStream {
   }
 
   private closed(code?: number): void {
+    this.telemetry.closeCode = Number.isInteger(code) ? code! : 0;
     if (this.recovery && this.buffer && this.everReady && !this.stopping && (code === 1006 || code === undefined) && this.retries < 3) {
       this.ready = false; this.reconnecting = true; this.transportError = true;
       clearTimeout(this.timer); clearTimeout(this.errorTimer); clearInterval(this.flushTimer);
@@ -212,6 +225,9 @@ export class ForegroundStream {
       const before = this.buffer.pending();
       this.buffer.acknowledge(event.chunk_seq as number);
       if (this.buffer.pending() < before) {
+        this.telemetry.acknowledgedFrames++;
+        this.telemetry.lastAckSeq = event.chunk_seq as number;
+        this.telemetry.lastAckUtc = new Date().toISOString();
         this.retries = 0;
         this.waitingSince = this.buffer.pending() ? Date.now() : undefined;
       }
@@ -219,16 +235,25 @@ export class ForegroundStream {
     } else if (event.type === 'error') {
       this.fail('Ses sunucusu hata bildirdi. Test durduruldu.');
     } else if (event.type === 'drained' && this.stopping && this.eofSent) {
+      this.telemetry.drainedUtc = new Date().toISOString();
       const resolve = this.stopResolve;
       this.stopResolve = undefined;
       this.dispose();
       resolve?.(true);
     } else if (Number.isSafeInteger(event.seq) && (event.seq as number) >= 0) {
       if (event.type === 'partial' && typeof event.confirmed === 'string' && typeof event.tentative === 'string') {
+        this.telemetry.partialEvents++; this.telemetry.lastTextUtc = new Date().toISOString();
         this.onText({ seq: event.seq as number, text: [event.confirmed, event.tentative].filter(Boolean).join(' '), final: false, confirmed: event.confirmed, tentative: event.tentative });
       } else if (event.type === 'final' && typeof event.text === 'string') {
+        this.telemetry.finalEvents++; this.telemetry.lastTextUtc = new Date().toISOString();
         this.onText({ seq: event.seq as number, text: event.text, final: true });
       }
     }
+  }
+
+  private sent(seq: number): void {
+    this.telemetry.sentFrames++;
+    this.telemetry.lastSentSeq = seq;
+    this.telemetry.lastSendUtc = new Date().toISOString();
   }
 }

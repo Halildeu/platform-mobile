@@ -4,12 +4,12 @@ import { persistedResult } from '../audio/liveTestApi';
 import type { PersistedResult } from './persistedResult';
 
 type Props = {
-  meetingId: string; load?: (id: string) => Promise<PersistedResult>;
+  meetingId: string; load?: (id: string) => Promise<PersistedResult>; onDiagnostic?: (message: string) => void;
 };
 export function PersistedResultPanel(props: Props) {
   return <ResultForMeeting key={props.meetingId} {...props} />;
 }
-function ResultForMeeting({ meetingId, load = persistedResult }: Props) {
+function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic }: Props) {
   const [result, setResult] = useState<PersistedResult | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -24,13 +24,18 @@ function ResultForMeeting({ meetingId, load = persistedResult }: Props) {
     if (pending.current) return;
     pending.current = true; setBusy(true); setResult(null); setError(''); setSources(false);
     const run = lifecycle.current.generation;
+    onDiagnostic?.('Kalıcı sonuç okuma isteği başlatıldı');
     try {
       const next = await load(meetingId);
       if (run !== lifecycle.current.generation) return;
       if (next.meetingId !== meetingId) throw new Error('Sonuç seçilen toplantıyla eşleşmiyor.');
       setResult(next);
+      onDiagnostic?.('Kalıcı sonuç alındı ve toplantı eşleşmesi doğrulandı');
     } catch (e) {
-      if (run === lifecycle.current.generation) setError(e instanceof Error ? e.message : 'Kalıcı sonuç okunamadı.');
+      if (run === lifecycle.current.generation) {
+        const message = e instanceof Error ? e.message : 'Kalıcı sonuç okunamadı.';
+        setError(message); onDiagnostic?.(message);
+      }
     } finally { if (run === lifecycle.current.generation) { pending.current = false; setBusy(false); } }
   }
   return <View style={styles.panel}>

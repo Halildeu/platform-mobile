@@ -48,49 +48,64 @@ export default function LiveTestScreen() {
   const failure = useRef<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<string[]>([]);
   const stage = useRef('Başlatma');
+  const diagnosticTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
+  const analysisCount = useRef(0);
+  function log(value: string) {
+    setDiagnostics(previous => [...previous, `${new Date().toISOString()} | ${value}`].filter((_, index, all) => index < 3 || index >= all.length - 297));
+  }
+  function logTransport(connection: ForegroundStream | null) {
+    if (!connection) { log('Ses taşıma bağlantısı oluşturulmadı.'); return; }
+    const d = connection.diagnostics();
+    log(`Ses: mikrofon tamponu=${d.capturedBuffers}, bayt=${d.capturedBytes}, üretilen parça=${d.generatedFrames}, gönderim denemesi=${d.sentFrames} (tekrarlar dahil), gateway onaylı=${d.acknowledgedFrames}, bekleyen=${d.pendingFrames}; son gönderilen sıra=${d.lastSentSeq}, son onay sırası=${d.lastAckSeq}`);
+    log(`Son mikrofon=${d.lastCaptureUtc || 'yok'}; son gönderim=${d.lastSendUtc || 'yok'}; son gateway onayı=${d.lastAckUtc || 'yok'}; son metin=${d.lastTextUtc || 'yok'}; geçici metin olayı=${d.partialEvents}, kesin metin olayı=${d.finalEvents}`);
+    log(`Ses sonu gönderimi=${d.eofUtc || 'yok'}; drained onayı=${d.drainedUtc || 'yok'}; WebSocket kapanış kodu=${d.closeCode || 'gözlenmedi'}; analiz sonucu sayısı=${analysisCount.current}. Gateway onayı STT/analiz tamamlandı anlamına gelmez.`);
+  }
   function markStage(value: string) {
     stage.current = value;
     setStatus(value + '…');
-    setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | ${value}`].slice(-30));
+    setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | ${value}`].filter((_, index, all) => index < 3 || index >= all.length - 297));
   }
-  const stopTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const { stream } = useAudioStream({ sampleRate: 16000, channels: 1, encoding: 'int16',
     onBuffer: (buffer) => live.current?.send(buffer.data, buffer.sampleRate, buffer.channels, Date.now()),
   });
 
-  async function stop() {
+  async function stop(reason = 'Belirtilmeyen durdurma çağrısı') {
     if (!active.current) return;
     active.current = false;
     captureStarted.current = false;
     backgroundActive.current = false;
-    clearTimeout(stopTimer.current);
+    clearInterval(diagnosticTimer.current);
+    log(`Durdurma nedeni: ${reason}`);
     stream.stop();
     setRecording(false);
     setBusy(true);
     setStatus('Son sözler bekleniyor…');
     const connection = live.current;
     const id = session.current;
-    setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | Durdurma istendi`].slice(-30));
+    setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | Durdurma istendi`].filter((_, index, all) => index < 3 || index >= all.length - 297));
     live.current = null;
     session.current = null;
     try {
       const drained = await connection?.stop();
-      if (id && token.current) { token.current = await api.validSession(15000); await api.finish(token.current.jwt, id); }
+      log(`Ses akışı kapanış sonucu: ${drained ? 'drained doğrulandı' : 'drained doğrulanamadı'}`);
+      if (id && token.current) { log('HTTP kayıt kapanışı başlatıldı'); token.current = await api.validSession(15000); await api.finish(token.current.jwt, id); log('HTTP kayıt kapanışı: FINISHED yanıtı doğrulandı'); }
       if (!failure.current && stopAnalysis.current && !analysisReceived.current) {
         setStatus('Ses kaydı bitti; analiz sonucu en fazla 20 saniye bekleniyor…');
         setAnalysisStatus('Son metin parçaları işlendi; analiz sonucu bekleniyor.');
         await new Promise<void>(resolve => setTimeout(resolve, 20_000));
       }
       setStatus(failure.current ?? (drained ? 'Test bitti. Ekrandaki metni konuşmanızla karşılaştırabilirsiniz.' : 'Test durdu; son sözlerin tamamlandığı doğrulanamadı.'));
-    } catch { setStatus(failure.current ?? 'Test durdu; sunucudaki kapanış doğrulanamadı.'); }
+    } catch (error) { log(`Kapanış başarısız: ${error instanceof Error ? error.message : 'nedeni alınamadı'}`); setStatus(failure.current ?? 'Test durdu; sunucudaki kapanış doğrulanamadı.'); }
     finally {
+      logTransport(connection);
+      log('Analiz aboneliği istemci tarafından kapatılıyor. Sunucu analiz tetikleme/işleme aşamaları telefon tarafından doğrulanamaz.');
       generation.current++;
       stopAnalysis.current?.(); stopAnalysis.current = null;
       if (!analysisReceived.current && !failure.current) {
         setAnalysisStatus('Canlı analiz sonucu gelmedi. Tanılama kaydındaki analiz aşamasını sunucu kaydıyla eşleştirin.');
-        setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | Canlı analiz sonucu 20 saniyede gelmedi`].slice(-30));
+        setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | Canlı analiz sonucu 20 saniyede gelmedi`].filter((_, index, all) => index < 3 || index >= all.length - 297));
       }
-      if (failure.current) setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | ${failure.current}`].slice(-30));
+      if (failure.current) setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | ${failure.current}`].filter((_, index, all) => index < 3 || index >= all.length - 297));
       connection?.dispose();
       void configureBackgroundCapture(false).catch(() => {});
       setBusy(false);
@@ -103,21 +118,22 @@ export default function LiveTestScreen() {
     const listener = stream.addListener?.('audioStreamStatus', (event) => {
       if (!event.isStreaming && active.current && captureStarted.current) {
         failure.current = 'Kayıt cihaz tarafından veya kayıt bildiriminden durduruldu.';
-        void stopRef.current();
+        void stopRef.current('Cihaz veya bildirim kaydı durdurdu; ikisi native olaydan ayırt edilemiyor');
       }
     });
     return () => listener?.remove();
   }, [stream]);
   useEffect(() => {
     const listener = AppState.addEventListener('change', (state) => {
+      if (active.current) log(`Uygulama durumu=${state}; arka plan kaydı=${backgroundActive.current}`);
       // The system permission dialog can temporarily deactivate the app.
       // No audio has started during this phase.
       if (state !== 'active' && !permissionPending.current && !backgroundActive.current) {
         if (active.current) failure.current = 'Uygulama arka plana geçtiği için test durduruldu.';
-        void stopRef.current();
+        void stopRef.current('Uygulama arka plana geçti; arka plan kaydı etkin değil');
       }
     });
-    return () => { listener.remove(); void stopRef.current(); };
+    return () => { listener.remove(); void stopRef.current('Kayıt ekranından ayrılındı'); };
   }, []);
 
   useEffect(() => {
@@ -230,7 +246,8 @@ export default function LiveTestScreen() {
     if (active.current || !selected || !token.current) return;
     active.current = true;
     failure.current = null;
-    setDiagnostics([`Mobil tanılama v1 | Deneme: ${Crypto.randomUUID()} | UTC: ${new Date().toISOString()}`]);
+    analysisCount.current = 0;
+    setDiagnostics([`Mobil tanılama v2 | Deneme: ${Crypto.randomUUID()} | UTC: ${new Date().toISOString()} | Toplantı: ${selected}`, 'Otomatik süre sınırı yok. Ham ses, konuşma içeriği ve token rapora dahil edilmez. Uygulama zorla kapatılırsa son olay kaydedilemeyebilir.']);
     const run = ++generation.current;
     setBusy(true);
     setLines([]);
@@ -260,12 +277,12 @@ export default function LiveTestScreen() {
       const id = await api.begin(token.current.jwt, selected, markStage);
       if (generation.current !== run) { await api.finish(token.current.jwt, id); return; }
       session.current = id;
-      setDiagnostics((previous) => [...previous, `Ses oturumu: ${id}`].slice(-30));
+      setDiagnostics((previous) => [...previous.slice(0, 2), `Ses oturumu: ${id}`, ...previous.slice(2)]);
       markStage('Ses bağlantısının açılması');
       analysisReceived.current = false;
       stopAnalysis.current = subscribeAnalysis({ baseUrl: api.BASE_URL, meetingId: selected, token: token.current.jwt,
-        onSnapshot: (snapshot) => { if (generation.current === run) { analysisReceived.current = true; setAnalysis((previous) => newerAnalysis(previous, snapshot)); } },
-        onStatus: (message) => { if (generation.current === run) { setAnalysisStatus(message); setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | Analiz: ${message}`].slice(-30)); } },
+        onSnapshot: (snapshot) => { if (generation.current === run) { analysisCount.current++; log(`Analiz sonucu alındı: adet=${analysisCount.current}`); analysisReceived.current = true; setAnalysis((previous) => newerAnalysis(previous, snapshot)); } },
+        onStatus: (message) => { if (generation.current === run) { setAnalysisStatus(message); setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | Analiz: ${message}`].filter((_, index, all) => index < 3 || index >= all.length - 297)); } },
       });
       const NativeWebSocket = WebSocket as unknown as new (url: string, protocols: string[] | undefined, options: { headers: Record<string, string> }) => LiveSocket;
       const socket = new NativeWebSocket(`${api.BASE_URL.replace('https:', 'wss:')}/api/v1/audio-gateway/sessions/${encodeURIComponent(id)}/stream`, undefined,
@@ -279,19 +296,20 @@ export default function LiveTestScreen() {
           if (background && !stream.isStreaming) throw new Error('Arka plan kayıt servisi başlatılamadı.');
           captureStarted.current = true;
           backgroundActive.current = background;
-          setRecording(true); setBusy(false); setStatus('Dinleniyor — konuşabilirsiniz. Test 60 saniye sonra durur.');
-          setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | Mikrofon başladı`].slice(-30));
-          stopTimer.current = setTimeout(() => void stopRef.current(), 60000);
+          setRecording(true); setBusy(false); setStatus('Dinleniyor — konuşabilirsiniz. Bitirmek için Durdur düğmesine basın.');
+          setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | Mikrofon başladı`].filter((_, index, all) => index < 3 || index >= all.length - 297));
+          log('Mikrofon açık; otomatik süre sınırı yok');
+          diagnosticTimer.current = setInterval(() => logTransport(live.current), 10000);
         }).catch(() => {
           if (generation.current !== run) return;
           failure.current = 'Mikrofon başlatılamadı veya gerekli 16 kHz mono ses biçimi sağlanamadı.';
-          void stopRef.current();
+          void stopRef.current('Mikrofon başlatma hatası');
         });
       }, (line) => {
         setLines((previous) => applyTranscriptEvent({ lines: previous }, line.final
           ? { type: 'final', seq: line.seq, text: line.text }
           : { type: 'partial', seq: line.seq, confirmed: line.confirmed ?? '', tentative: line.tentative ?? line.text }).lines);
-      }, (message) => { failure.current = message; setStatus(message); void stopRef.current(); },
+      }, (message) => { log(`Ses bağlantısı hatası: ${message}`); failure.current = message; setStatus(message); void stopRef.current('Ses aktarımı veya WebSocket hatası'); },
       new OfflineAudioBuffer({ maxBytes: 2 * 1024 * 1024, maxChunks: 2000 }), {
         connect: async () => {
           const refreshed = await api.validSession(30000);
@@ -303,14 +321,14 @@ export default function LiveTestScreen() {
         onStatus: (message) => {
           if (generation.current === run) {
             setStatus(message);
-            setDiagnostics(previous => [...previous, `${new Date().toISOString()} | ${message}`].slice(-30));
+            setDiagnostics(previous => [...previous, `${new Date().toISOString()} | ${message}`].filter((_, index, all) => index < 3 || index >= all.length - 297));
           }
         },
       });
     } catch (error) {
       if (error instanceof SessionExpired) { token.current = null; setSignedIn(false); setList([]); setSelected(undefined); }
       failure.current = `Aşama: ${stage.current}\n${error instanceof Error ? error.message : 'Test başlatılamadı; nedeni doğrulanmadı.'}`;
-      await stopRef.current();
+      await stopRef.current('Başlatma aşaması başarısız');
       setStatus(failure.current);
     }
   }
@@ -321,7 +339,7 @@ export default function LiveTestScreen() {
     {recording && <Text accessibilityRole="alert" style={styles.recording}>● Mikrofon açık · Kayıt sürüyor</Text>}
     <Pressable accessibilityRole="button" onPress={() => setSetup(!setup)}><Text style={styles.selected}>{setup ? 'Toplantı ayarlarını gizle' : 'Toplantı seç / ayarlar'}</Text></Pressable>
     {setup && <View>
-    <Text style={styles.note}>{background ? `Arka planda kayıt açık. Kaydı uygulamadan${Platform.OS === 'android' ? ' veya kayıt bildiriminden' : ''} durdurabilirsiniz. Bu deneme 60 saniyedir.` : 'Bu kısa denemede ekran açık kalmalıdır.'} Kısa ağ kesintisinde yeniden bağlanmayı dener; düzelmezse test durur.</Text>
+    <Text style={styles.note}>{background ? `Arka planda kayıt açık. Kaydı uygulamadan${Platform.OS === 'android' ? ' veya kayıt bildiriminden' : ''} durdurabilirsiniz. Otomatik süre sınırı yoktur.` : 'Bu kısa denemede ekran açık kalmalıdır.'} Kısa ağ kesintisinde yeniden bağlanmayı dener; düzelmezse test durur.</Text>
     {supportsBackgroundCapture() && <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
       <Text style={styles.note}>Ekran kapalıyken kayda devam et</Text>
       <Switch accessibilityLabel="Arka planda kayıt" value={background} disabled={busy || recording} onValueChange={setBackground} />
@@ -341,14 +359,14 @@ export default function LiveTestScreen() {
     </View></ScrollView></View>}
     <Pressable accessibilityState={{ disabled: !selected || busy || recording }} disabled={!selected || busy || recording} style={[styles.button, (!selected || busy || recording) && styles.disabled]} onPress={() => Alert.alert('Konuşma testi', api.CONSENT,
       [{ text: 'Vazgeç' }, { text: 'Kabul et ve başlat', onPress: () => { setSetup(false); setTab('text'); void start(); } }])}><Text style={styles.text}>Konuşma testini başlat</Text></Pressable>
-    <Pressable disabled={!recording && !busy} style={[styles.button, (!recording && !busy) && styles.disabled]} onPress={() => void stop()}><Text style={styles.text}>Durdur</Text></Pressable>
+    <Pressable disabled={!recording && !busy} style={[styles.button, (!recording && !busy) && styles.disabled]} onPress={() => void stop('Kullanıcı ekrandaki Durdur düğmesine bastı')}><Text style={styles.text}>Durdur</Text></Pressable>
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
       {([['text', 'Metin'], ['summary', 'Özet'], ['decisions', 'Kararlar'], ['actions', 'Aksiyonlar'], ['saved', 'Kaydedilen'], ['diagnostics', 'Tanılama']] as const).map(([key, label]) =>
         <Pressable key={key} accessibilityRole="tab" accessibilityState={{ selected: tab === key }} onPress={() => setTab(key)} style={{ padding: 8, borderBottomWidth: 2, borderBottomColor: tab === key ? '#93c5fd' : 'transparent' }}><Text style={styles.text}>{label}</Text></Pressable>)}
     </View>
     {tab === 'text' && <View style={{ flex: 1 }}><TranscriptView lines={lines} />{!lines.length && <Text style={styles.note}>Kayıt başladığında konuşmanız burada görünecek.</Text>}</View>}
     {tab !== 'text' && <ScrollView style={{ flex: 1 }}>
-      {tab === 'saved' && signedIn && selected && !recording && !busy && <PersistedResultPanel key={selected} meetingId={selected} />}
+      {tab === 'saved' && signedIn && selected && !recording && !busy && <PersistedResultPanel key={selected} meetingId={selected} onDiagnostic={log} />}
       {tab === 'saved' && (!signedIn || !selected || recording || busy) && <Text style={styles.note}>Kaydı durdurup bir toplantı seçtikten sonra kalıcı sonucu açabilirsiniz.</Text>}
       {(tab === 'summary' || tab === 'decisions' || tab === 'actions') && <LiveAnalysisPanel snapshot={analysis} status={analysisStatus} section={tab} />}
       {tab === 'diagnostics' && <View>

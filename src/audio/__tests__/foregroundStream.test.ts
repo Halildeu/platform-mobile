@@ -11,6 +11,22 @@ function setup(buffer?: OfflineAudioBuffer) {
 beforeEach(() => jest.useFakeTimers());
 afterEach(() => jest.useRealTimers());
 
+test('diagnostics distinguish sent frames from receipts and never retain transcript content', async () => {
+  const { client, event } = setup(new OfflineAudioBuffer());
+  event({ type: 'ready' });
+  client.send(new ArrayBuffer(2), 16000, 1, 0);
+  expect(client.diagnostics()).toMatchObject({ sentFrames: 1, acknowledgedFrames: 0, pendingFrames: 1 });
+  event({ type: 'audio_ack', chunk_seq: 0 });
+  event({ type: 'audio_ack', chunk_seq: 0 });
+  event({ type: 'final', seq: 0, text: 'private speech must not be logged' });
+  expect(client.diagnostics()).toMatchObject({ acknowledgedFrames: 1, pendingFrames: 0, finalEvents: 1 });
+  expect(JSON.stringify(client.diagnostics())).not.toContain('private speech');
+  const stopped = client.stop();
+  event({ type: 'drained' });
+  expect(await stopped).toBe(true);
+  expect(client.diagnostics().drainedUtc).not.toBe('');
+});
+
 function recoverySetup() {
   const makeSocket = (): LiveSocket => ({ readyState: 1, bufferedAmount: 0, onopen: null, onmessage: null,
     onerror: null, onclose: null, send: jest.fn(), close: jest.fn() });
