@@ -10,13 +10,13 @@ it('opens native PDF/print only after the user requests export', async () => {
   jest.mocked(printAsync).mockResolvedValue(undefined);
   const screen = render(<LiveAnalysisPanel snapshot={snapshot} status="Canlı" />);
   expect(printAsync).not.toHaveBeenCalled();
-  fireEvent.press(screen.getByText('PDF / Yazdır'));
+  fireEvent.press(screen.getByText('Canlı taslağı PDF / Yazdır'));
   await waitFor(() => expect(printAsync).toHaveBeenCalledWith({ html: expect.stringContaining('Doğrulanmış özet') }));
 });
 it('shows a safe cancellation/failure message without native error content', async () => {
   jest.mocked(printAsync).mockRejectedValue(new Error('private-native-payload'));
   const screen = render(<LiveAnalysisPanel snapshot={snapshot} status="Canlı" />);
-  fireEvent.press(screen.getByText('PDF / Yazdır'));
+  fireEvent.press(screen.getByText('Canlı taslağı PDF / Yazdır'));
   await waitFor(() => expect(screen.getByText(/PDF\/yazdırma tamamlanmadı/)).toBeTruthy());
   expect(screen.queryByText(/private-native-payload/)).toBeNull();
 });

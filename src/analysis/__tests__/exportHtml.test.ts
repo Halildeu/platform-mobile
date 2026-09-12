@@ -5,7 +5,7 @@ it('keeps untrusted markup inert and preserves Turkish text and partial status',
     decisions: ['Ödeme görüşülecek'], actions: [{ text: '</td><script>bad()</script>', owner: null, dueDate: null }] });
   expect(html).not.toContain('<script>'); expect(html).not.toContain('<img');
   expect(html).toContain('&lt;img'); expect(html).toContain('Ödeme görüşülecek');
-  expect(html).toContain('toplantı sürerken değişebilir'); expect(html).toContain('Belirtilmedi');
+  expect(html).toContain('kaydedilmiş nihai sonuç değildir'); expect(html).toContain('Belirtilmedi');
   expect(html).toContain("default-src 'none'");
 });
 

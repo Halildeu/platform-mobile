@@ -27,7 +27,7 @@ export function LiveAnalysisPanel({ snapshot, status, section = 'all' }: { snaps
     <Text style={styles.note}>{status}</Text>
     {!snapshot && <Text style={styles.text}>Henüz analiz sonucu alınmadı. Metnin görünmesi, analizin de geldiği anlamına gelmez.</Text>}
     {snapshot && <>
-      <Text style={styles.note}>{snapshot.partial ? 'Güncellenebilir canlı sonuç' : 'Son analiz'} · {snapshot.version}</Text>
+      <Text style={styles.note}>{snapshot.partial ? 'Canlı taslak — toplantı bitince değişebilir; nihai sonuç değildir.' : 'Son analiz'} · Sürüm {snapshot.version}</Text>
       {(section === 'all' || section === 'summary') && <Text style={styles.text}>{snapshot.summary || 'Bu sonuçta doğrulanmış özet yok.'}</Text>}
       {(section === 'all' || section === 'decisions') && <><Text style={styles.title}>Kararlar</Text>
       {!snapshot.decisions.length && <Text style={styles.text}>Bu analizde karar bulunmuyor.</Text>}
@@ -39,10 +39,10 @@ export function LiveAnalysisPanel({ snapshot, status, section = 'all' }: { snaps
         <Text style={styles.note}>Sorumlu: {action.owner ?? 'Belirtilmedi'} · Tarih: {action.dueDate ?? 'Belirtilmedi'}</Text>
       </View>)}</>}
       <Pressable accessibilityRole="button" disabled={sharing} onPress={() => void share()}>
-        <Text style={styles.text}>{sharing ? 'Paylaşım açılıyor…' : 'Markdown olarak paylaş'}</Text>
+        <Text style={styles.text}>{sharing ? 'Paylaşım açılıyor…' : snapshot.partial ? 'Canlı taslağı Markdown olarak paylaş' : 'Markdown olarak paylaş'}</Text>
       </Pressable>
       <Pressable accessibilityRole="button" disabled={sharing} onPress={() => void print()}>
-        <Text style={styles.text}>PDF / Yazdır</Text>
+        <Text style={styles.text}>{snapshot.partial ? 'Canlı taslağı PDF / Yazdır' : 'PDF / Yazdır'}</Text>
       </Pressable>
       {!!shareError && <Text accessibilityRole="alert" style={styles.note}>{shareError}</Text>}
     </>}
