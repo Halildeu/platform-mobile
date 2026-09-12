@@ -1,8 +1,50 @@
-import { begin, createMeeting } from '../liveTestApi';
+import { begin, createMeeting, finish } from '../liveTestApi';
 const requestId = '12345678-1234-1234-1234-123456789abc';
 jest.mock('expo-auth-session', () => ({}));
 jest.mock('expo-crypto', () => ({ randomUUID: () => '12345678-1234-1234-1234-123456789abc',
   CryptoDigestAlgorithm: { SHA256: 'SHA256' }, digestStringAsync: async () => 'test-hash' }));
+
+const finished = {
+  sessionId: 'session-1', correlationId: requestId, finalState: 'FINISHED',
+  finishedAtMs: 1789233000000, alreadyFinished: false,
+};
+
+it.each([false, true])('accepts exact terminal finish acknowledgement (replay=%s)', async (alreadyFinished) => {
+  const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+    ok: true, json: async () => ({ ...finished, alreadyFinished }),
+  } as Response);
+  try {
+    await expect(finish('test-token', 'session-1')).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toMatch(/\/sessions\/session-1\/finish$/);
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({
+      method: 'POST', body: '{}', headers: { 'Idempotency-Key': 'session-1:mobile-finish' },
+    });
+  } finally { fetchMock.mockRestore(); }
+});
+
+it.each([
+  ['wrong session', { ...finished, sessionId: 'session-2' }],
+  ['nonterminal state', { ...finished, finalState: 'FINISHING' }],
+  ['missing state', { ...finished, finalState: undefined }],
+  ['missing timestamp', { ...finished, finishedAtMs: undefined }],
+  ['string timestamp', { ...finished, finishedAtMs: '1789233000000' }],
+  ['negative timestamp', { ...finished, finishedAtMs: -1 }],
+  ['fractional timestamp', { ...finished, finishedAtMs: 1.5 }],
+  ['unsafe timestamp', { ...finished, finishedAtMs: Number.MAX_SAFE_INTEGER + 1 }],
+  ['missing replay flag', { ...finished, alreadyFinished: undefined }],
+  ['string replay flag', { ...finished, alreadyFinished: 'false' }],
+  ['empty response', {}], ['null response', null], ['array response', []],
+  ['untrusted text', 'secret-token person@example.com'],
+])('rejects %s without retry or response disclosure', async (_name, payload) => {
+  const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue({
+    ok: true, json: async () => payload,
+  } as Response);
+  try {
+    await expect(finish('test-token', 'session-1')).rejects.toThrow('Kayıt kapanışı doğrulanamadı.');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  } finally { fetchMock.mockRestore(); }
+});
 
 it('requests realtime mode instead of the server balanced default', async () => {
   const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValueOnce({
