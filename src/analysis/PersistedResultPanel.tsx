@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { persistedResult } from '../audio/liveTestApi';
 import type { PersistedResult } from './persistedResult';
@@ -16,7 +16,9 @@ function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic }: P
   const [sources, setSources] = useState(false);
   const lifecycle = useRef({ generation: 0 });
   const pending = useRef(false);
-  useEffect(() => { void refresh(); }, []);
+  // The keyed meeting mounts once; diagnostic callback updates must not reload it.
+  const restoreOnMount = useEffectEvent(() => { void refresh(); });
+  useEffect(() => { restoreOnMount(); }, []);
   useEffect(() => {
     const instance = lifecycle.current;
     return () => { instance.generation++; };
