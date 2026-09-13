@@ -21,7 +21,8 @@ import { saveMeetingView, readMeetingView, clearMeetingViews } from '../src/audi
 WebBrowser.maybeCompleteAuthSession();
 
 export default function LiveTestScreen() {
-  const { authRestart } = useLocalSearchParams<{ authRestart?: string }>();
+  const { authRestart, notificationMeetingId } = useLocalSearchParams<{ authRestart?: string; notificationMeetingId?: string }>();
+  const handledNotification = useRef<string | undefined>(undefined);
   const [status, setStatus] = useState(authRestart === '1'
     ? 'Uygulama yeniden açıldığı için giriş işlemi tamamlanamadı. Lütfen yeniden giriş yapın.'
     : 'Önce giriş yapın, ardından bir toplantı seçin.');
@@ -48,6 +49,16 @@ export default function LiveTestScreen() {
   const permissionPending = useRef(false);
   const failure = useRef<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<string[]>([]);
+  useEffect(() => {
+    if (!notificationMeetingId || !signedIn || busy || active.current || handledNotification.current === notificationMeetingId) return;
+    if (list.some(meeting => meeting.id === notificationMeetingId)) {
+      handledNotification.current = notificationMeetingId;
+      selectMeeting(notificationMeetingId);
+      setStatus('Bildirimdeki toplantı seçildi; kayıtlı sonuç kontrol ediliyor.');
+    } else {
+      setStatus('Bildirimdeki toplantı mevcut listede bulunamadı. Listeyi yenileyin; erişim yetkisi doğrulanmadan içerik açılmadı.');
+    }
+  }, [notificationMeetingId, signedIn, busy, list]);
   useEffect(() => {
     if (selected && signedIn) saveMeetingView(selected, { lines, analysis, diagnostics });
   }, [selected, signedIn, lines, analysis, diagnostics]);

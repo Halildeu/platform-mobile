@@ -1,5 +1,6 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { useMeetingNotifications } from '../src/notifications/useMeetingNotifications';
 
 import '../src/i18n'; // i18next global örneğini başlatır (Türkçe varsayılan)
 
@@ -10,6 +11,7 @@ import '../src/i18n'; // i18next global örneğini başlatır (Türkçe varsayı
  * Auth guard + Redux Provider sonraki sliceler'de eklenecek.
  */
 export default function RootLayout() {
+  useMeetingNotifications();
   return (
     <>
       <StatusBar style="light" />
