@@ -20,6 +20,34 @@ test('automatically restores the selected meeting and opens source excerpts', as
   fireEvent.press(screen.getByText('Kaynakları göster'));
   expect(screen.getByText('Kaynak alıntısı')).toBeTruthy();
 });
+test('diagnostic callback rerenders do not repeat automatic restore', async () => {
+  const load = jest.fn().mockResolvedValue(result('A'));
+  const firstDiagnostic = jest.fn();
+  const nextDiagnostic = jest.fn();
+  const screen = render(<PersistedResultPanel meetingId="A" load={load} onDiagnostic={firstDiagnostic} />);
+  await act(async () => {});
+  screen.rerender(<PersistedResultPanel meetingId="A" load={load} onDiagnostic={nextDiagnostic} />);
+  await act(async () => {});
+  expect(load).toHaveBeenCalledTimes(1);
+  expect(nextDiagnostic).not.toHaveBeenCalled();
+  expect(screen.getByText('Kalıcı özet')).toBeTruthy();
+});
+test('manual refresh after a rerender uses the current loader and diagnostic callback', async () => {
+  const firstLoad = jest.fn().mockResolvedValue(result('A'));
+  const nextLoad = jest.fn().mockResolvedValue({ ...result('A'), summary: 'Güncel özet' });
+  const nextDiagnostic = jest.fn();
+  const screen = render(<PersistedResultPanel meetingId="A" load={firstLoad} />);
+  await act(async () => {});
+  screen.rerender(<PersistedResultPanel meetingId="A" load={nextLoad} onDiagnostic={nextDiagnostic} />);
+  await act(async () => {});
+  expect(nextLoad).not.toHaveBeenCalled();
+  fireEvent.press(screen.getByText('Kalıcı sonucu aç / yenile'));
+  await act(async () => {});
+  expect(nextLoad).toHaveBeenCalledTimes(1);
+  expect(nextLoad).toHaveBeenCalledWith('A');
+  expect(nextDiagnostic).toHaveBeenCalledTimes(2);
+  expect(screen.getByText('Güncel özet')).toBeTruthy();
+});
 test('late response cannot restore the previous meeting and duplicate taps are suppressed', async () => {
   let resolve!: (r: PersistedResult) => void;
   const load = jest.fn(() => new Promise<PersistedResult>(r => { resolve = r; }));

@@ -22,6 +22,7 @@ on:
       - "package*.json"
       - "babel.config.js"
       - "scripts/e2e-apk*"
+      - "scripts/e2e-maestro*"
       - ".github/workflows/e2e-mobile.yml"
 
 permissions:
@@ -35,6 +36,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
+      APK_ARCH: ${{ inputs.target == 'device' && 'arm64-v8a' || 'x86_64' }}
       CI: "1"
       EXPO_NO_TELEMETRY: "1"
       MAESTRO_CLI_NO_ANALYTICS: "1"
@@ -52,7 +54,7 @@ jobs:
           java-version: "17"
       - uses: android-actions/setup-android@v3
       - name: Test artifact handoff guard
-        run: node --test scripts/e2e-apk.test.mjs
+        run: node --test scripts/e2e-apk.test.mjs scripts/e2e-maestro.test.mjs
       - name: Install locked dependencies
         run: npm ci
       - name: Generate native project from this checkout
@@ -61,12 +63,13 @@ jobs:
         working-directory: android
         # Previous run exhausted the Expo template's 512 MiB Metaspace during lint.
         # Bound concurrency and retain lint; emulator uses a separate runner.
-        run: ./gradlew :app:assembleRelease -PreactNativeArchitectures=${{ inputs.target == 'device' && 'arm64-v8a' || 'x86_64' }} '-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=1536m -Dfile.encoding=UTF-8' -Dorg.gradle.parallel=false --no-daemon --max-workers=1
+        run: ./gradlew :app:assembleRelease -PreactNativeArchitectures="$APK_ARCH" '-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=1536m -Dfile.encoding=UTF-8' -Dorg.gradle.parallel=false --no-daemon --max-workers=1
       - name: Bind APK to exact checkout
         run: |
           mkdir -p artifacts/apk
           cp android/app/build/outputs/apk/release/app-release.apk artifacts/apk/app-release.apk
-          node scripts/e2e-apk.mjs seal artifacts/apk "$(git rev-parse HEAD)"
+          node scripts/e2e-apk.mjs seal artifacts/apk "$(git rev-parse HEAD)" "$APK_ARCH"
+          node scripts/e2e-apk.mjs verify artifacts/apk "$(git rev-parse HEAD)" "$APK_ARCH"
       - uses: actions/upload-artifact@v4
         with:
           name: android-${{ inputs.target == 'device' && 'device' || 'emulator' }}-apk-${{ github.sha }}
@@ -102,7 +105,7 @@ jobs:
           name: android-emulator-apk-${{ github.sha }}
           path: artifacts/apk/
       - name: Verify exact checkout and APK digest
-        run: node scripts/e2e-apk.mjs verify artifacts/apk "$(git rev-parse HEAD)"
+        run: node scripts/e2e-apk.mjs verify artifacts/apk "$(git rev-parse HEAD)" x86_64
       - name: Measure disk before emulator
         run: df -h . "$RUNNER_TEMP"
       - name: Install pinned Maestro CLI
@@ -128,10 +131,7 @@ jobs:
           arch: x86_64
           target: google_apis
           disable-animations: true
-          script: |
-            adb install -r artifacts/apk/app-release.apk
-            mkdir -p artifacts/maestro
-            maestro test -e APP_ID=com.workcube.meeting --format junit --output artifacts/maestro/results.xml --debug-output artifacts/maestro --test-output-dir artifacts/maestro .maestro/
+          script: node scripts/e2e-maestro.mjs
       - name: Require both successful-flow screenshots
         run: |
           test -n "$(find artifacts/maestro -type f -name '*app-launch-success*.png' -print -quit)"
@@ -143,7 +143,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: android-maestro-${{ github.sha }}
+          name: android-maestro-${{ github.sha }}-attempt-${{ github.run_attempt }}
           path: |
             artifacts/maestro/
             artifacts/apk/manifest.json
