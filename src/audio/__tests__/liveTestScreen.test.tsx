@@ -9,11 +9,12 @@ const mockPermission = jest.fn();
 const mockDrain = jest.fn();
 let mockFailure: (message: string) => void;
 let mockReady: () => void;
+let mockParams: { notificationMeetingId?: string } = {};
 jest.mock('expo-audio', () => ({
   AudioModule: { requestRecordingPermissionsAsync: (...args: unknown[]) => mockPermission(...args) },
   useAudioStream: () => ({ stream: { start: mockStart, stop: mockStop, sampleRate: 16000, channels: 1 } }),
 }));
-jest.mock('expo-router', () => ({ useLocalSearchParams: () => ({}) }));
+jest.mock('expo-router', () => ({ useLocalSearchParams: () => mockParams }));
 jest.mock('../backgroundCapture', () => ({ supportsBackgroundCapture: () => false, configureBackgroundCapture: jest.fn(async () => {}) }));
 jest.mock('expo-web-browser', () => ({ maybeCompleteAuthSession: jest.fn() }));
 jest.mock('../liveTestApi', () => ({
@@ -33,6 +34,7 @@ jest.mock('../foregroundStream', () => ({ ForegroundStream: jest.fn().mockImplem
 
 beforeEach(() => {
   jest.clearAllMocks();
+  mockParams = {};
   mockDrain.mockResolvedValue(false);
   jest.mocked(api.login).mockResolvedValue({ jwt: 'test-only', expiresAt: Date.now() + 600000 });
   jest.mocked(api.validSession).mockResolvedValue({ jwt: 'test-only', expiresAt: Date.now() + 600000 });
@@ -130,4 +132,44 @@ it('creates and selects a new meeting without starting the microphone', async ()
   await waitFor(() => expect(screen.getByText('✓ Yeni görüşme')).toBeTruthy());
   expect(api.createMeeting).toHaveBeenCalledWith('test-only', 'Yeni görüşme');
   expect(mockStart).not.toHaveBeenCalled(); expect(api.begin).not.toHaveBeenCalled();
+});
+
+it('opens an authorized notification meeting only after session restoration without starting audio', async () => {
+  mockParams = { notificationMeetingId: 'meeting-1' };
+  jest.mocked(api.restoreSession).mockResolvedValueOnce({ jwt: 'restored', expiresAt: Date.now() + 300000 });
+  const screen = render(<LiveTestScreen />);
+  await waitFor(() => expect(screen.getByText('✓ Test toplantısı')).toBeTruthy());
+  expect(screen.getByText('Bildirimdeki toplantı seçildi; kayıtlı sonuç kontrol ediliyor.')).toBeTruthy();
+  expect(api.begin).not.toHaveBeenCalled();
+  expect(mockStart).not.toHaveBeenCalled();
+  screen.rerender(<LiveTestScreen />);
+  expect(screen.getByText('✓ Test toplantısı')).toBeTruthy();
+});
+
+it('keeps a notification gated until login and rejects a meeting absent from the authorized list', async () => {
+  mockParams = { notificationMeetingId: 'foreign-meeting' };
+  const screen = render(<LiveTestScreen />);
+  await act(async () => {});
+  expect(api.meetings).not.toHaveBeenCalled();
+  fireEvent.press(screen.getByText('Giriş yap'));
+  await waitFor(() => expect(screen.getByText(/Bildirimdeki toplantı mevcut listede bulunamadı/)).toBeTruthy());
+  expect(screen.queryByText('✓ Test toplantısı')).toBeNull();
+  expect(api.begin).not.toHaveBeenCalled();
+});
+
+it('defers a different notification meeting while recording and applies it after cleanup', async () => {
+  mockPermission.mockResolvedValue({ granted: true });
+  jest.mocked(api.meetings).mockResolvedValue([
+    { id: 'meeting-1', title: 'Test toplantısı' }, { id: 'meeting-2', title: 'İkinci toplantı' },
+  ]);
+  const screen = await openAndStart();
+  await waitFor(() => expect(api.begin).toHaveBeenCalled());
+  mockParams = { notificationMeetingId: 'meeting-2' };
+  screen.rerender(<LiveTestScreen />);
+  fireEvent.press(screen.getByText('Toplantı seç / ayarlar'));
+  expect(screen.getByText('✓ Test toplantısı')).toBeTruthy();
+  expect(mockStop).not.toHaveBeenCalled();
+  await act(async () => { mockFailure('Kontrollü test kapanışı'); });
+  await waitFor(() => expect(screen.getByText('✓ İkinci toplantı')).toBeTruthy());
+  expect(api.begin).toHaveBeenCalledTimes(1);
 });
