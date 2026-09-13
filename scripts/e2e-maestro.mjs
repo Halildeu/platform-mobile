@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
+import { monitorTransport } from "./e2e-maestro-transport.mjs";
 
 const runId = process.env.GITHUB_RUN_ID;
 const attempt = process.env.GITHUB_RUN_ATTEMPT;
@@ -80,25 +81,44 @@ let status = execute(
 );
 snapshot("after-install");
 if (status === 0) {
-  status = execute(
-    "maestro",
-    "maestro",
-    [
-      "test",
-      "-e",
-      "APP_ID=com.workcube.meeting",
-      "--format",
-      "junit",
-      "--output",
-      `${directory}/results.xml`,
-      "--debug-output",
-      directory,
-      "--test-output-dir",
-      directory,
-      ".maestro/",
-    ],
-    1200000,
-  );
+  const monitor = monitorTransport();
+  const start = performance.now();
+  const result = await new Promise((resolve) => {
+    const child = spawn(
+      "maestro",
+      [
+        "test",
+        "-e",
+        "APP_ID=com.workcube.meeting",
+        "--format",
+        "junit",
+        "--output",
+        `${directory}/results.xml`,
+        "--debug-output",
+        directory,
+        "--test-output-dir",
+        directory,
+        ".maestro/",
+      ],
+      { stdio: "inherit", timeout: 1200000, killSignal: "SIGKILL" },
+    );
+    let error;
+    child.on("error", (value) => {
+      error = value;
+    });
+    child.on("close", (code, signal) =>
+      resolve({ status: code, signal, error }),
+    );
+  });
+  status = result.status ?? 1;
+  evidence.steps.push({
+    phase: "maestro",
+    elapsedMs: Math.round(performance.now() - start),
+    ...outcome(result),
+  });
+  evidence.transport = await monitor.stop();
+  // Missing diagnostics must not turn an unexplained flaky run into acceptance.
+  if (status === 0 && !evidence.transport.complete) status = 1;
   snapshot("after-maestro");
 }
 evidence.exitCode = status;
