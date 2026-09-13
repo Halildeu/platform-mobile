@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { Alert, AppState, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, Text, View } from 'react-native';
 import * as Crypto from 'expo-crypto';
 import { AudioModule, useAudioStream } from 'expo-audio';
@@ -49,15 +49,18 @@ export default function LiveTestScreen() {
   const permissionPending = useRef(false);
   const failure = useRef<string | null>(null);
   const [diagnostics, setDiagnostics] = useState<string[]>([]);
-  useEffect(() => {
-    if (!notificationMeetingId || !signedIn || busy || active.current || handledNotification.current === notificationMeetingId) return;
-    if (list.some(meeting => meeting.id === notificationMeetingId)) {
-      handledNotification.current = notificationMeetingId;
-      selectMeeting(notificationMeetingId);
+  const openNotificationMeeting = useEffectEvent((id: string) => {
+    if (list.some(meeting => meeting.id === id)) {
+      handledNotification.current = id;
+      selectMeeting(id);
       setStatus('Bildirimdeki toplantı seçildi; kayıtlı sonuç kontrol ediliyor.');
     } else {
       setStatus('Bildirimdeki toplantı mevcut listede bulunamadı. Listeyi yenileyin; erişim yetkisi doğrulanmadan içerik açılmadı.');
     }
+  });
+  useEffect(() => {
+    if (!notificationMeetingId || !signedIn || busy || active.current || handledNotification.current === notificationMeetingId) return;
+    openNotificationMeeting(notificationMeetingId);
   }, [notificationMeetingId, signedIn, busy, list]);
   useEffect(() => {
     if (selected && signedIn) saveMeetingView(selected, { lines, analysis, diagnostics });
