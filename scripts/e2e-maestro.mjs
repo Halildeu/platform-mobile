@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
+import { setTimeout, clearTimeout } from "node:timers";
 import { monitorTransport } from "./e2e-maestro-transport.mjs";
 
 const runId = process.env.GITHUB_RUN_ID;
@@ -100,15 +101,17 @@ if (status === 0) {
         directory,
         ".maestro/",
       ],
-      { stdio: "inherit", timeout: 1200000, killSignal: "SIGKILL" },
+      { stdio: "inherit" },
     );
-    let error;
-    child.on("error", (value) => {
-      error = value;
+    const deadline = setTimeout(() => child.kill("SIGKILL"), 1200000);
+    child.on("error", (error) => {
+      clearTimeout(deadline);
+      resolve({ status: null, signal: null, error });
     });
-    child.on("close", (code, signal) =>
-      resolve({ status: code, signal, error }),
-    );
+    child.on("close", (code, signal) => {
+      clearTimeout(deadline);
+      resolve({ status: code, signal });
+    });
   });
   status = result.status ?? 1;
   evidence.steps.push({

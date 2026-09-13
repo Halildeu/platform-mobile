@@ -66,7 +66,7 @@ function run(f, env = {}) {
     encoding: "utf8",
     env: {
       ...process.env,
-      PATH: `${f.bin}:${process.env.PATH}`,
+      PATH: f.bin,
       GITHUB_RUN_ID: "123",
       GITHUB_RUN_ATTEMPT: "2",
       GITHUB_SHA: "a".repeat(40),
