@@ -1,0 +1,48 @@
+name: Mobile staged update
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        type: choice
+        options: [publish-5, advance-25, advance-100, rollback-previous]
+        required: true
+      channel:
+        type: choice
+        options: [development, preview, production]
+        required: true
+      group:
+        description: 'Exact rollout group, or verified previous group for rollback'
+        type: string
+        required: false
+permissions:
+  contents: read
+concurrency:
+  group: mobile-update-${{ inputs.channel }}
+  cancel-in-progress: false
+jobs:
+  update:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: mobile-${{ inputs.channel }}
+    env:
+      UPDATE_OPERATION: ${{ inputs.operation }}
+      UPDATE_CHANNEL: ${{ inputs.channel }}
+      UPDATE_GROUP: ${{ inputs.group }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: node --test scripts/update-plan.test.mjs
+      - name: Validate destination and OTA readiness
+        run: node scripts/update-plan.mjs
+      - run: npm run typecheck
+      - run: npm test -- --runInBand
+      - name: Install EAS CLI
+        run: npm install --global eas-cli
+      - name: Execute selected update operation
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: node scripts/update-plan.mjs --execute

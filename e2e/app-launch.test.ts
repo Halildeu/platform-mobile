@@ -18,8 +18,8 @@ describe('app-launch', () => {
     });
   });
 
-  it('renders the app-root and lands on the meeting list header', async () => {
+  it('renders the actual home screen', async () => {
     await detoxExpect(element(by.id('app-root'))).toBeVisible();
-    await detoxExpect(element(by.id('meeting-list-header'))).toBeVisible();
+    await detoxExpect(element(by.id('app-home-title'))).toBeVisible();
   });
 });

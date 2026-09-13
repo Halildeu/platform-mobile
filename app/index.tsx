@@ -1,3 +1,4 @@
+import { Link } from 'expo-router';
 import { StyleSheet, Text, View } from 'react-native';
 
 /**
@@ -7,11 +8,17 @@ import { StyleSheet, Text, View } from 'react-native';
  * - PR-mobile-01: Keycloak SSO PKCE login redirect
  * - PR-mobile-02: Meeting list + create
  */
-export default function IndexScreen(): JSX.Element {
+export default function IndexScreen() {
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>Workcube Meeting Intelligence</Text>
+    <View testID="app-root" style={styles.container}>
+      <Text testID="app-home-title" style={styles.title}>Workcube Meeting Intelligence</Text>
       <Text style={styles.subtitle}>Faz 24 M6 Integration — skeleton</Text>
+      <Link testID="open-transcript-demo" href="/transcript-demo" style={styles.link}>
+        Canlı transkript demosu →
+      </Link>
+      <Link href="/live-test" style={styles.link}>
+        Gerçek konuşma testi →
+      </Link>
       <Text style={styles.note}>
         Next: Keycloak SSO + audio capture + live transcript
       </Text>
@@ -37,6 +44,12 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 14,
     color: '#94a3b8',
+    marginBottom: 24,
+  },
+  link: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#60a5fa',
     marginBottom: 24,
   },
   note: {

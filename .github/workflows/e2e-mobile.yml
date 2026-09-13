@@ -1,83 +1,153 @@
-name: E2E — Mobile (Maestro + Detox)
-#
-# Faz 24 M6 mobile E2E harness.
-#
-# Trigger model (Opsiyon 3 — local-first, see docs/e2e-strategy.md):
-#   - workflow_dispatch: manual run from Actions UI or `gh workflow run`
-#   - pull_request path filter: only runs when the E2E surfaces change,
-#     so a docs/renderer-copy PR does not pay the mobile CI tax
-#
-# Runner: `runs-on: [self-hosted, macos]` when a self-hosted mac is
-# available; falls back to a stub job that documents the local command
-# so a green baseline exists in the PR checks without paying the
-# billing-blocked `macos-latest` cost. Flip the runner label + remove
-# the stub once İ-M4 lands the runner choice.
+name: E2E — Android Maestro
 
 on:
   workflow_dispatch:
     inputs:
-      track:
-        description: 'Which E2E track to run'
-        required: true
-        default: 'maestro'
+      target:
+        description: "APK hedefi"
+        required: false
+        default: "emulator"
         type: choice
         options:
-          - maestro
-          - detox-ios
-          - detox-android
+          - emulator
+          - device
   pull_request:
     paths:
-      - '.maestro/**'
-      - '.detoxrc.js'
-      - 'e2e/**'
-      - 'package.json'
-      - '.github/workflows/e2e-mobile.yml'
+      - "app/**"
+      - "src/**"
+      - "plugins/**"
+      - "assets/**"
+      - ".maestro/**"
+      - "app.json"
+      - "package*.json"
+      - "babel.config.js"
+      - "scripts/e2e-apk*"
+      - "scripts/e2e-maestro*"
+      - ".github/workflows/e2e-mobile.yml"
 
 permissions:
   contents: read
+concurrency:
+  group: mobile-e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  # Documents that E2E is wired without paying macOS-hosted minutes; a
-  # self-hosted mac runner flips this to a real Maestro / Detox job.
-  # Keeps green baseline so a mobile PR's Checks tab is honest.
-  stub-until-runner:
-    if: github.event_name == 'pull_request'
+  build-android-apk:
     runs-on: ubuntu-latest
-    steps:
-      - name: E2E runner not yet wired (see docs/e2e-strategy.md § Runner)
-        run: |
-          echo "::notice::E2E mobile harness is scaffolded but no macOS runner"
-          echo "::notice::has been wired yet. Run locally:"
-          echo "  npm run test:maestro         # Maestro flow smoke"
-          echo "  npm run test:e2e:ios         # Detox iOS (needs prebuild)"
-          echo "  npm run test:e2e:android     # Detox Android (needs prebuild)"
-          echo "See docs/e2e-strategy.md § Runner for the wiring decision."
-
-  # Manual dispatch on a self-hosted mac. Ubuntu fallback keeps the job
-  # visible (with a clear error) if someone dispatches without a runner.
-  maestro-dispatch:
-    if: github.event_name == 'workflow_dispatch' && inputs.track == 'maestro'
-    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      APK_ARCH: ${{ inputs.target == 'device' && 'arm64-v8a' || 'x86_64' }}
+      CI: "1"
+      EXPO_NO_TELEMETRY: "1"
+      MAESTRO_CLI_NO_ANALYTICS: "1"
     steps:
       - uses: actions/checkout@v4
-      - name: Fail-loud without a mac runner
+      - name: Measure disk before build
+        run: df -h . "$RUNNER_TEMP"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - name: Test artifact handoff guard
+        run: node --test scripts/e2e-apk.test.mjs scripts/e2e-maestro.test.mjs
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Generate native project from this checkout
+        run: npx expo prebuild --platform android --no-install
+      - name: Build APK from this checkout
+        working-directory: android
+        # Previous run exhausted the Expo template's 512 MiB Metaspace during lint.
+        # Bound concurrency and retain lint; emulator uses a separate runner.
+        run: ./gradlew :app:assembleRelease -PreactNativeArchitectures="$APK_ARCH" '-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=1536m -Dfile.encoding=UTF-8' -Dorg.gradle.parallel=false --no-daemon --max-workers=1
+      - name: Bind APK to exact checkout
         run: |
-          echo "::error::Maestro requires a macOS runner with the iOS"
-          echo "::error::simulator (or an Android emulator). This job stub"
-          echo "::error::exits 1 so a dispatch without a runner is visible"
-          echo "::error::instead of silently passing."
-          echo "::error::Local command: npm run test:maestro"
-          exit 1
+          mkdir -p artifacts/apk
+          cp android/app/build/outputs/apk/release/app-release.apk artifacts/apk/app-release.apk
+          node scripts/e2e-apk.mjs seal artifacts/apk "$(git rev-parse HEAD)" "$APK_ARCH"
+          node scripts/e2e-apk.mjs verify artifacts/apk "$(git rev-parse HEAD)" "$APK_ARCH"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-${{ inputs.target == 'device' && 'device' || 'emulator' }}-apk-${{ github.sha }}
+          path: artifacts/apk/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
+      - name: Measure disk after build
+        if: always()
+        run: df -h . "$RUNNER_TEMP"
 
-  detox-dispatch:
-    if: github.event_name == 'workflow_dispatch' && startsWith(inputs.track, 'detox-')
+  android-maestro:
+    if: ${{ inputs.target != 'device' }}
+    needs: build-android-apk
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CI: "1"
+      MAESTRO_CLI_NO_ANALYTICS: "1"
     steps:
       - uses: actions/checkout@v4
-      - name: Fail-loud without a mac runner + prebuild
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      # Default download scope is this workflow run, never another run's latest APK.
+      - uses: actions/download-artifact@v4
+        with:
+          name: android-emulator-apk-${{ github.sha }}
+          path: artifacts/apk/
+      - name: Verify exact checkout and APK digest
+        run: node scripts/e2e-apk.mjs verify artifacts/apk "$(git rev-parse HEAD)" x86_64
+      - name: Measure disk before emulator
+        run: df -h . "$RUNNER_TEMP"
+      - name: Install pinned Maestro CLI
+        shell: bash
         run: |
-          echo "::error::Detox needs the Expo prebuild committed + a native"
-          echo "::error::binary produced by \`eas build --profile development\`,"
-          echo "::error::plus a runner with the iOS simulator or Android"
-          echo "::error::emulator. See docs/e2e-strategy.md § Roadmap İ-M2."
-          exit 1
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/maestro-cli"
+          cd "$RUNNER_TEMP/maestro-cli"
+          curl --fail --location --retry 3 -o maestro.zip https://github.com/mobile-dev-inc/Maestro/releases/download/cli-2.10.0/maestro.zip
+          curl --fail --location --retry 3 -o checksums_sha256.txt https://github.com/mobile-dev-inc/Maestro/releases/download/cli-2.10.0/checksums_sha256.txt
+          sha256sum --check checksums_sha256.txt
+          unzip -q maestro.zip
+          echo "$RUNNER_TEMP/maestro-cli/maestro/bin" >> "$GITHUB_PATH"
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Run actual Android UI flows
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: node scripts/e2e-maestro.mjs
+      - name: Require both successful-flow screenshots
+        run: |
+          test -n "$(find artifacts/maestro -type f -name '*app-launch-success*.png' -print -quit)"
+          test -n "$(find artifacts/maestro -type f -name '*transcript-revised-demo*.png' -print -quit)"
+      - name: Measure disk after emulator
+        if: always()
+        run: df -h . "$RUNNER_TEMP"
+      - name: Preserve test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-maestro-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          path: |
+            artifacts/maestro/
+            artifacts/apk/manifest.json
+            *-success.png
+            transcript-revised-demo.png
+          if-no-files-found: warn
+          retention-days: 7

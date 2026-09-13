@@ -4,7 +4,12 @@
     "appVersionSource": "remote"
   },
   "build": {
+    "simulator": {
+      "extends": "preview",
+      "ios": { "simulator": true }
+    },
     "development": {
+      "channel": "development",
       "developmentClient": true,
       "distribution": "internal",
       "ios": {
@@ -12,12 +17,14 @@
       }
     },
     "preview": {
+      "channel": "preview",
       "distribution": "internal",
       "ios": {
         "simulator": false
       }
     },
     "production": {
+      "channel": "production",
       "autoIncrement": true,
       "ios": {
         "buildConfiguration": "Release"

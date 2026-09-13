@@ -2,7 +2,7 @@
   "expo": {
     "name": "Workcube Meeting",
     "slug": "workcube-meeting",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "workcube",
@@ -17,7 +17,9 @@
       "bundleIdentifier": "com.workcube.meeting",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Workcube Meeting toplantı sesini transkripte dönüştürmek için mikrofon erişimine ihtiyaç duyar. KVKK kapsamında ses kaydı şifrelenir ve toplantı sahibinin onayıyla işlenir.",
-        "UIBackgroundModes": ["audio"],
+        "UIBackgroundModes": [
+          "audio"
+        ],
         "ITSAppUsesNonExemptEncryption": false
       },
       "config": {
@@ -36,7 +38,11 @@
         "FOREGROUND_SERVICE",
         "FOREGROUND_SERVICE_MICROPHONE",
         "POST_NOTIFICATIONS",
-        "WAKE_LOCK"
+        "WAKE_LOCK",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
       ]
     },
     "web": {
@@ -46,7 +52,7 @@
     "plugins": [
       "expo-router",
       "expo-secure-store",
-      "expo-sqlite",
+      ["expo-sqlite", { "useSQLCipher": true }],
       "expo-notifications",
       "expo-local-authentication",
       [
@@ -54,25 +60,27 @@
         {
           "microphonePermission": "Workcube Meeting toplantı sesini transkripte dönüştürmek için mikrofon erişimine ihtiyaç duyar."
         }
-      ]
+      ],
+      "expo-asset",
+      "expo-font"
     ],
     "experiments": {
       "typedRoutes": true
     },
     "extra": {
       "eas": {
-        "projectId": ""
+        "projectId": "3597d06c-21ec-4908-b453-e72f219d5758"
       },
       "router": {
         "origin": false
       }
     },
-    "owner": "halildeu",
+    "owner": "serban1245",
     "runtimeVersion": {
       "policy": "appVersion"
     },
     "updates": {
-      "url": "https://u.expo.dev/UPDATE_PROJECT_ID"
+      "enabled": false
     }
   }
 }

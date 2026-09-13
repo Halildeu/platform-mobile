@@ -1,5 +1,16 @@
 # platform-mobile E2E strategy — Faz 24 M6
 
+## 2026-09-10 doğrulama düzeltmesi
+
+Önceki metindeki “çalışan smoke”, “macOS matrix” ve yeşil baseline ifadeleri
+cihaz koşumu kanıtı değildir. Mevcut workflow gerçek cihaz/emülatör başlatmıyor.
+PR stub artık exit 1 verir; test çalışmadan E2E kabulü göstermez.
+Detox iOS yolları Expo'nun mevcut addan ürettiği WorkcubeMeeting adına düzeltildi.
+Jest'e TypeScript için babel-jest dönüşümü eklendi; gerçek test dosyasının
+dönüştürülüp JavaScript olarak ayrıştırıldığı yerelde doğrulandı.
+Android/iOS native derleme başarıları Detox native entegrasyonu veya E2E başarısı
+değildir. Runner, Detox instrumentation ve iki platformda ekran kanıtı hâlâ gerekli.
+
 **Status:** ADR-lite • **Author:** Claude Code • **Date:** 2026-07-21
 **Tracks:** [platform-mobile #1 — Detox + Maestro + browser MCP wrapper](https://github.com/Halildeu/platform-mobile/issues/1)
 
