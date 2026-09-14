@@ -27,7 +27,7 @@ function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic }: P
     if (pending.current) return;
     pending.current = true; setBusy(true); setResult(null); setError(''); setSources(false);
     const run = lifecycle.current.generation;
-    onDiagnostic?.('Kalıcı sonuç okuma isteği başlatıldı');
+    onDiagnostic?.(`Kalıcı sonuç okuma isteği başlatıldı; toplantı=${meetingId}`);
     try {
       const next = await load(meetingId);
       if (run !== lifecycle.current.generation) return;
@@ -44,6 +44,7 @@ function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic }: P
   return <View style={styles.panel}>
     <Text style={styles.title}>Kaydedilmiş toplantı sonucu</Text>
     <Text style={styles.text}>Toplantının sunucuda saklanan en son analizidir; son kayıt denemenizden önceki bir oturuma ait olabilir.</Text>
+    <Text style={styles.text}>Kayıt durduktan sonra kalıcı sonucun hazırlanması birkaç dakika sürebilir. Canlı taslak, kaydedilmiş sonuç değildir.</Text>
     <Pressable accessibilityRole="button" disabled={busy} onPress={() => void refresh()}>
       <Text style={styles.link}>{busy ? 'Sonuç okunuyor…' : 'Kalıcı sonucu aç / yenile'}</Text>
     </Pressable>
@@ -51,10 +52,10 @@ function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic }: P
     {result && <>
       <Text style={styles.text}>Oluşturulma: {result.generatedAt}</Text>
       <Text selectable style={styles.text}>Oturum: {result.sessionId}</Text>
-      {!!result.summary && <Text style={styles.text}>{result.summary}</Text>}
-      {result.decisions.map((d, i) => <Text key={i} style={styles.text}>• {d}</Text>)}
-      {result.actions.map((a, i) => <View key={i}><Text style={styles.text}>{a.text}</Text>
-        <Text style={styles.text}>Sorumlu: {a.owner ?? 'Belirtilmedi'} · Tarih: {a.dueDate ?? 'Belirtilmedi'}</Text></View>)}
+      {!!result.summary && <Text selectable style={styles.text}>{result.summary}</Text>}
+      {result.decisions.map((d, i) => <Text selectable key={i} style={styles.text}>• {d}</Text>)}
+      {result.actions.map((a, i) => <View key={i}><Text selectable style={styles.text}>{a.text}</Text>
+        <Text selectable style={styles.text}>Sorumlu: {a.owner ?? 'Belirtilmedi'} · Tarih: {a.dueDate ?? 'Belirtilmedi'}</Text></View>)}
       <Pressable accessibilityRole="button" onPress={() => setSources(!sources)}><Text style={styles.link}>{sources ? 'Kaynakları gizle' : 'Kaynakları göster'}</Text></Pressable>
       {sources && (result.sources.length ? result.sources.map((s, i) => <View key={i}>
         <Text style={styles.title}>{s.claim}</Text><Text selectable style={styles.text}>{s.text}</Text>
