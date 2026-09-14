@@ -11,6 +11,26 @@ test('shows automatic restore failures and records diagnostics rather than a bla
   expect(screen.getByText('Kalıcı sonuç 404')).toBeTruthy();
   expect(onDiagnostic).toHaveBeenLastCalledWith('Kalıcı sonuç 404');
 });
+test('keeps the current result while refreshing but clears it if access fails', async () => {
+  let rejectRefresh!: (error: Error) => void;
+  const load = jest.fn().mockResolvedValueOnce(result('A')).mockImplementationOnce(() =>
+    new Promise<PersistedResult>((_, reject) => { rejectRefresh = reject; }));
+  const screen = render(<PersistedResultPanel meetingId="A" load={load} />);
+  await act(async () => {});
+  fireEvent.press(screen.getByText('Kalıcı sonucu aç / yenile'));
+  expect(screen.getByText('Kalıcı özet')).toBeTruthy();
+  expect(screen.getByText('Sonuç okunuyor…')).toBeTruthy();
+  await act(async () => rejectRefresh(new Error('Erişim reddedildi')));
+  expect(screen.queryByText('Kalıcı özet')).toBeNull();
+  expect(screen.getByText('Erişim reddedildi')).toBeTruthy();
+});
+test('explains missing analysis sections without inventing content', async () => {
+  const screen = render(<PersistedResultPanel meetingId="A" load={async () => ({ ...result('A'), summary: '' })} />);
+  await act(async () => {});
+  expect(screen.getByText('Bu sonuçta gösterilebilir özet bulunmuyor.')).toBeTruthy();
+  expect(screen.getByText('Bu sonuçta karar bulunmuyor.')).toBeTruthy();
+  expect(screen.getByText('Bu sonuçta aksiyon bulunmuyor.')).toBeTruthy();
+});
 test('automatically restores the selected meeting and opens source excerpts', async () => {
   const load = jest.fn().mockResolvedValue(result('A'));
   const screen = render(<PersistedResultPanel meetingId="A" load={load} />);

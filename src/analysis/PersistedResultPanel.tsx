@@ -25,7 +25,7 @@ function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic }: P
   }, []);
   async function refresh() {
     if (pending.current) return;
-    pending.current = true; setBusy(true); setResult(null); setError(''); setSources(false);
+    pending.current = true; setBusy(true); setError('');
     const run = lifecycle.current.generation;
     onDiagnostic?.(`Kalıcı sonuç okuma isteği başlatıldı; toplantı=${meetingId}`);
     try {
@@ -36,6 +36,7 @@ function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic }: P
       onDiagnostic?.('Kalıcı sonuç alındı ve toplantı eşleşmesi doğrulandı');
     } catch (e) {
       if (run === lifecycle.current.generation) {
+        setResult(null); setSources(false);
         const message = e instanceof Error ? e.message : 'Kalıcı sonuç okunamadı.';
         setError(message); onDiagnostic?.(message);
       }
@@ -52,8 +53,13 @@ function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic }: P
     {result && <>
       <Text style={styles.text}>Oluşturulma: {result.generatedAt}</Text>
       <Text selectable style={styles.text}>Oturum: {result.sessionId}</Text>
-      {!!result.summary && <Text selectable style={styles.text}>{result.summary}</Text>}
+      <Text style={styles.title}>Özet</Text>
+      <Text selectable style={styles.text}>{result.summary || 'Bu sonuçta gösterilebilir özet bulunmuyor.'}</Text>
+      <Text style={styles.title}>Kararlar</Text>
+      {!result.decisions.length && <Text style={styles.text}>Bu sonuçta karar bulunmuyor.</Text>}
       {result.decisions.map((d, i) => <Text selectable key={i} style={styles.text}>• {d}</Text>)}
+      <Text style={styles.title}>Aksiyonlar</Text>
+      {!result.actions.length && <Text style={styles.text}>Bu sonuçta aksiyon bulunmuyor.</Text>}
       {result.actions.map((a, i) => <View key={i}><Text selectable style={styles.text}>{a.text}</Text>
         <Text selectable style={styles.text}>Sorumlu: {a.owner ?? 'Belirtilmedi'} · Tarih: {a.dueDate ?? 'Belirtilmedi'}</Text></View>)}
       <Pressable accessibilityRole="button" onPress={() => setSources(!sources)}><Text style={styles.link}>{sources ? 'Kaynakları gizle' : 'Kaynakları göster'}</Text></Pressable>
