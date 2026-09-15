@@ -30,11 +30,14 @@ export async function createRecordingBuffer(options: Options, open?: Open) {
   const opener = open ?? (await import('./encryptedChunkBuffer')).openEncryptedChunkBuffer;
   const handle = await opener({ ...limits, ownerScope, sessionId: options.sessionId,
     retentionMs: options.retentionMs, onStorageError: options.onStorageError });
+  let releaseAction: 'retained' | 'removed' | undefined;
   let released: 'retained' | 'removed' | undefined;
   return { mode: 'encrypted' as const, buffer: handle.buffer, release: async () => {
     if (released) return released;
     // Transport success alone is not an acknowledgement. Never delete pending audio here.
-    if (handle.buffer.pending() > 0) {
+    // Cleanup can close storage before failing; retries must not read that closed store.
+    releaseAction ??= handle.buffer.pending() > 0 ? 'retained' : 'removed';
+    if (releaseAction === 'retained') {
       handle.close();
       released = 'retained';
     } else {
