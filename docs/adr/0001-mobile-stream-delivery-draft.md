@@ -15,6 +15,12 @@ KVKK ADR 0030'un saklama, onay ve inceleme koşulları geçerlidir. Anahtar kayb
 hesap değişimi, süre dolumu, uygulama yeniden açılışı ve veritabanı temizliği cihazda
 kanıtlanmadan kalıcı tampon ürün kabulü yapılamaz.
 
+2026-09-15 kaynak düzeltmesi: kapatma hatasında depolama erişimi engellenir;
+anahtar/dosya silinmeden önce veritabanı kapatma yeniden denenir. Eşzamanlı
+temizleme çağrıları tek işlem paylaşır. Anahtar silme başarısızlığı sonraki
+çağrıda yeniden denenebilir. Saklama süresi ve varsayılan kapalı durum değişmez;
+bu düzeltme gerçek cihaz veya kalıcı tampon entegrasyon kabulü değildir.
+
 ## Arka plan
 
 İncelenen expo-audio 57.0.4 Android kaynağında AudioStream.start mikrofon iznini
@@ -28,3 +34,22 @@ ayrı değişiklikte gerekir. iOS ses oturumu ve kilit ekranı da cihazda denenm
 
 Sağlayıcıdan bağımsız kod incelemesi, gerçek Android/iOS ve gerekli uçtan uca
 kontroller tamamlanmadan #6/#7 kapatılmaz. Bu taslak üretim ayarı değiştirmez.
+
+## 2026-09-15 kayıt akışına tampon seçimi
+
+`live-test` mikrofon/WebSocket başlamadan `createRecordingBuffer` çağırır.
+`expo.extra.audioBufferRetentionMs` yok/null olduğunda mevcut 2 MiB/2000 parça
+bellek tamponu kullanılır; native SQLite modülü yüklenmez ve anahtar oluşturulmaz.
+Bu değişiklik app.json içine süre veya etkinleştirme ayarı eklemez.
+Pozitif tam sayı yapılandırıldığında kullanıcı/tenant hash'i ve ses oturumu ile
+ayrılmış mevcut SQLCipher açıcı kullanılır. Geçersiz süre veya şifreleme hatasında
+kayıt başlamaz; şifresiz depolamaya geri dönüş yoktur.
+
+Kapanışta sadece bekleyen parçası olmayan tampon silinir. Gönderilmiş fakat
+onaylanmamış parçalar varken veritabanı kapatılır, içerik silinmez. Temizleme
+başarısızlığı tanılamaya yazılır ve sonraki başlangıçtan önce yeniden denenir.
+Bu bağlantı uygulama yeniden başlatıldıktan sonra otomatik ses replay'i değildir.
+Kapalı veritabanlarının yeniden açılışta keşfi/TTL temizliği ve hesap değişimi
+kabulü henüz yoktur; süre belirlenmesi tek başına etkinleştirme kabulü sayılmaz.
+Bu kontroller tamamlanana kadar yapılandırma boş tutulmalıdır. Kayıt akışı
+bellek tamponuyla devam eder; #7 kapanış veya gerçek cihaz kabulü iddiası yoktur.

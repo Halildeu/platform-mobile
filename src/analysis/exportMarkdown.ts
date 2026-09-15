@@ -1,4 +1,5 @@
 import type { AnalysisSnapshot } from './liveAnalysis';
+import type { PersistedResult } from './persistedResult';
 
 function plain(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -6,10 +7,11 @@ function plain(value: string): string {
 }
 
 /** Export only the displayed, validated snapshot; no raw server payload or credentials. */
-export function analysisMarkdown(snapshot: AnalysisSnapshot): string {
+export function analysisMarkdown(snapshot: AnalysisSnapshot | PersistedResult): string {
+  const saved = 'analysisRunId' in snapshot;
   const text = ['# Toplantı analizi', '',
-    snapshot.partial ? '> Canlı sonuç: toplantı sürerken değişebilir.' : '> Son analiz çıktısı.',
-    `Sürüm: ${snapshot.version}`, '', '## Özet', '',
+    saved ? '> Kaydedilmiş toplantı sonucu.' : snapshot.partial ? '> Canlı sonuç: toplantı sürerken değişebilir.' : '> Son analiz çıktısı.',
+    saved ? `Oluşturulma: ${plain(snapshot.generatedAt)}` : `Sürüm: ${snapshot.version}`, '', '## Özet', '',
     snapshot.summary ? plain(snapshot.summary) : 'Gösterilebilir özet henüz yok.', '', '## Kararlar', '',
     ...snapshot.decisions.map((decision) => `- ${plain(decision)}`),
     ...(snapshot.decisions.length ? [] : ['Henüz karar yok.']), '', '## Aksiyonlar', '',

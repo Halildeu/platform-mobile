@@ -34,6 +34,12 @@ export async function openEncryptedChunkBuffer(options: {
     db.execSync(`PRAGMA key = "x'${key}'"`);
     db.execSync('PRAGMA secure_delete = ON;');
     let closed = false;
+    let databaseClosed = false;
+    const closeDatabase = () => {
+      if (databaseClosed) return;
+      db.closeSync();
+      databaseClosed = true;
+    };
     const assertOpen = () => { if (closed) throw new Error('Ses tamponu kapalı.'); };
     const adapter: SqliteLike = {
       execSync: (sql) => { assertOpen(); db.execSync(sql); }, runSync: (sql, params) => { assertOpen(); db.runSync(sql, params); },
@@ -49,19 +55,24 @@ export async function openEncryptedChunkBuffer(options: {
       catch {
         clearInterval(timer);
         closed = true;
-        try { db.closeSync(); } catch { /* Further storage access remains blocked. */ }
+        try { closeDatabase(); } catch { /* close/destroy can retry; further access remains blocked. */ }
         options.onStorageError?.();
       }
     }, Math.min(options.retentionMs!, 60000));
-    const close = () => { if (closed) return; closed = true; clearInterval(timer); db.closeSync(); };
+    const close = () => { closed = true; clearInterval(timer); closeDatabase(); };
     let destroyed = false;
-    return { buffer, close, destroy: async () => {
-      if (destroyed) return;
-      // Close before deleting the key/file. Key removal failure is visible and retryable.
-      close();
-      await SecureStore.deleteItemAsync(keyName);
-      SQLite.deleteDatabaseSync(`audio-${name}.db`);
-      destroyed = true;
+    let destroying: Promise<void> | undefined;
+    return { buffer, close, destroy: () => {
+      if (destroyed) return Promise.resolve();
+      if (destroying) return destroying;
+      // Serialize concurrent cleanup and retry failed close/key/file removal.
+      destroying = (async () => {
+        close();
+        await SecureStore.deleteItemAsync(keyName);
+        SQLite.deleteDatabaseSync(`audio-${name}.db`);
+        destroyed = true;
+      })().finally(() => { destroying = undefined; });
+      return destroying;
     } };
   } catch (error) { db.closeSync(); throw error; }
 }

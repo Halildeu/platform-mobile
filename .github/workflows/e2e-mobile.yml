@@ -53,6 +53,8 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       - name: Test artifact handoff guard
         run: node --test scripts/e2e-apk.test.mjs scripts/e2e-maestro.test.mjs
       - name: Install locked dependencies
@@ -99,6 +101,8 @@ jobs:
           distribution: temurin
           java-version: "17"
       - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
       # Default download scope is this workflow run, never another run's latest APK.
       - uses: actions/download-artifact@v4
         with:

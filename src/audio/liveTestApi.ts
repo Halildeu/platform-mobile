@@ -20,7 +20,7 @@ function orderedLifecycle<T>(work: () => Promise<T>): Promise<T> {
   lifecycleWork = next.catch(() => {});
   return next;
 }
-async function lifecycleOwner(jwt: string): Promise<string> {
+export async function lifecycleOwner(jwt: string): Promise<string> {
   try {
     if (jwt.length > 16384 || jwt.split('.').length !== 3) throw new Error();
     const encoded = jwt.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
