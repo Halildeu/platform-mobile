@@ -87,12 +87,32 @@ it('does not show successful stop when finish validation fails after a drained s
   jest.mocked(api.finish).mockRejectedValueOnce(new Error('Kayıt kapanışı doğrulanamadı.'));
   const screen = await openAndStart();
   await waitFor(() => expect(api.begin).toHaveBeenCalled());
+  await act(async () => { mockReady(); });
   await act(async () => { fireEvent.press(screen.getByText('Durdur')); });
+  const stopAlert = jest.mocked(Alert.alert).mock.calls.at(-1);
+  expect(stopAlert?.[0]).toBe('Kaydı bitir?');
+  expect(api.finish).not.toHaveBeenCalled();
+  await act(async () => { stopAlert?.[2]?.[1].onPress?.(); });
   expect(api.finish).toHaveBeenCalledWith('test-only', 'session-1');
   expect(screen.getByText('Test durdu; sunucudaki kapanış doğrulanamadı.')).toBeTruthy();
   expect(screen.queryByText('Test bitti. Ekrandaki metni konuşmanızla karşılaştırabilirsiniz.')).toBeNull();
   fireEvent.press(screen.getByText('Tanılama'));
-  expect(screen.getByText(/Durdurma nedeni: Kullanıcı ekrandaki Durdur düğmesine bastı/)).toBeTruthy();
+  expect(screen.getByText(/Durdurma nedeni: Kullanıcı Durdur düğmesine dokundu ve onay penceresinde Kaydı bitir seçti/)).toBeTruthy();
+});
+
+it('keeps recording when stop confirmation is cancelled', async () => {
+  mockPermission.mockResolvedValue({ granted: true });
+  const screen = await openAndStart();
+  await waitFor(() => expect(api.begin).toHaveBeenCalled());
+  await act(async () => { mockReady(); });
+  fireEvent.press(screen.getByText('Durdur'));
+  const stopAlert = jest.mocked(Alert.alert).mock.calls.at(-1);
+  await act(async () => { stopAlert?.[2]?.[0].onPress?.(); });
+  expect(mockStop).not.toHaveBeenCalled();
+  expect(mockDrain).not.toHaveBeenCalled();
+  expect(api.finish).not.toHaveBeenCalled();
+  expect(screen.getByText('● Mikrofon açık · Kayıt sürüyor')).toBeTruthy();
+  await act(async () => { mockFailure('Kontrollü test kapanışı'); });
 });
 
 it('keeps recording beyond the former 60 second limit', async () => {

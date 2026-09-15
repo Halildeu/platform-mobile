@@ -137,6 +137,19 @@ export default function LiveTestScreen() {
     }
   }
 
+  function confirmUserStop() {
+    if (!recording || !active.current) return;
+    log('Durdurma düğmesine dokunuldu; kullanıcı onayı bekleniyor');
+    Alert.alert(
+      'Kaydı bitir?',
+      'Konuşma kaydı duracak ve son metin sunucuya gönderilecek.',
+      [
+        { text: 'Kayda devam et', style: 'cancel', onPress: () => log('Durdurma onayı iptal edildi; kayıt sürüyor') },
+        { text: 'Kaydı bitir', style: 'destructive', onPress: () => void stop('Kullanıcı Durdur düğmesine dokundu ve onay penceresinde Kaydı bitir seçti') },
+      ],
+    );
+  }
+
   const stopRef = useRef(stop);
   useEffect(() => { stopRef.current = stop; });
   useEffect(() => {
@@ -403,7 +416,8 @@ export default function LiveTestScreen() {
     </View></ScrollView></View>}
     <Pressable accessibilityState={{ disabled: !selected || busy || recording }} disabled={!selected || busy || recording} style={[styles.button, (!selected || busy || recording) && styles.disabled]} onPress={() => Alert.alert('Konuşma testi', api.CONSENT,
       [{ text: 'Vazgeç' }, { text: 'Kabul et ve başlat', onPress: () => { setSetup(false); setTab('text'); void start(); } }])}><Text style={styles.text}>Konuşma testini başlat</Text></Pressable>
-    <Pressable disabled={!recording && !busy} style={[styles.button, (!recording && !busy) && styles.disabled]} onPress={() => void stop('Kullanıcı ekrandaki Durdur düğmesine bastı')}><Text style={styles.text}>Durdur</Text></Pressable>
+    <Pressable accessibilityRole="button" accessibilityState={{ disabled: !recording }} disabled={!recording}
+      style={[styles.button, !recording && styles.disabled]} onPress={confirmUserStop}><Text style={styles.text}>Durdur</Text></Pressable>
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
       {([['text', 'Metin'], ['summary', 'Özet'], ['decisions', 'Kararlar'], ['actions', 'Aksiyonlar'], ['saved', 'Kaydedilen'], ['diagnostics', 'Tanılama']] as const).map(([key, label]) =>
         <Pressable key={key} accessibilityRole="tab" accessibilityState={{ selected: tab === key }} onPress={() => setTab(key)} style={{ padding: 8, borderBottomWidth: 2, borderBottomColor: tab === key ? '#93c5fd' : 'transparent' }}><Text style={styles.text}>{label}</Text></Pressable>)}

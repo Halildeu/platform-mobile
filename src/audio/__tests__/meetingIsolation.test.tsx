@@ -44,6 +44,7 @@ test.each([
   });
   expect(screen.getByText('SYNTHETIC_A_TRANSCRIPT')).toBeTruthy();
   await act(async () => fireEvent.press(screen.getByText('Durdur')));
+  await act(async () => { alert.mock.calls.at(-1)?.[2]?.[1].onPress?.(); });
   fireEvent.press(screen.getByText('Toplantı seç / ayarlar'));
   if (change === 'select') {
     fireEvent.press(screen.getByText('Meeting B'));
