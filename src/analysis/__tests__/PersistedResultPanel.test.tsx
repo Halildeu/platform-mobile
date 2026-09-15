@@ -1,9 +1,26 @@
 import { act, fireEvent, render } from '@testing-library/react-native';
 import { PersistedResultPanel } from '../PersistedResultPanel';
 import type { PersistedResult } from '../persistedResult';
+import { Share } from 'react-native';
+import { printAsync } from 'expo-print';
+jest.mock('expo-print', () => ({ printAsync: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('../../audio/liveTestApi', () => ({ persistedResult: jest.fn() }));
 const result = (meetingId: string): PersistedResult => ({ meetingId, analysisRunId: 'run', sessionId: 'SES-1', generatedAt: '2026-09-10',
   summary: 'Kalıcı özet', decisions: [], actions: [], sources: [{ claim: 'Karar', text: 'Kaynak alıntısı', startSec: 12 }] });
+
+test('exports the loaded saved result without inventing a live version', async () => {
+  const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: Share.sharedAction });
+  const screen = render(<PersistedResultPanel meetingId="A" load={async () => result('A')} />);
+  await act(async () => {});
+  await act(async () => fireEvent.press(screen.getByText('Kaydedilmiş sonucu Markdown olarak paylaş')));
+  const message = (share.mock.calls[0][0] as { message: string }).message;
+  expect(message).toContain('Kaydedilmiş toplantı sonucu');
+  expect(message).toContain('Kalıcı özet');
+  expect(message).not.toContain('Sürüm:');
+  await act(async () => fireEvent.press(screen.getByText('Kaydedilmiş sonucu PDF / Yazdır')));
+  expect(printAsync).toHaveBeenCalledWith({ html: expect.stringContaining('Kaydedilmiş toplantı sonucu') });
+  share.mockRestore();
+});
 test('shows automatic restore failures and records diagnostics rather than a blank panel', async () => {
   const onDiagnostic = jest.fn();
   const screen = render(<PersistedResultPanel meetingId="A" load={async () => { throw new Error('Kalıcı sonuç 404'); }} onDiagnostic={onDiagnostic} />);

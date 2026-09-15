@@ -102,7 +102,7 @@ export function TranscriptView({
       scrollEventThrottle={16}
       renderItem={({ item }) => (
         <View style={styles.row}>
-          <Text style={styles.text}>{item.map((line, index) => (
+          <Text selectable style={styles.text}>{item.map((line, index) => (
             <Text key={line.seq} style={styles[line.status]}>
               {index > 0 && !/^[,.;:!?…]/.test(line.text) ? ' ' : ''}{line.text}
             </Text>

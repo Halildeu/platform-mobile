@@ -1,5 +1,8 @@
 import { useEffect, useEffectEvent, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Pressable, Share, StyleSheet, Text, View } from 'react-native';
+import { printAsync } from 'expo-print';
+import { analysisHtml } from './exportHtml';
+import { analysisMarkdown } from './exportMarkdown';
 import { persistedResult } from '../audio/liveTestApi';
 import type { PersistedResult } from './persistedResult';
 
@@ -14,6 +17,9 @@ function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic }: P
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [sources, setSources] = useState(false);
+  const [sharing, setSharing] = useState(false);
+  const [shareError, setShareError] = useState('');
+  const exporting = useRef(false);
   const lifecycle = useRef({ generation: 0 });
   const pending = useRef(false);
   // The keyed meeting mounts once; diagnostic callback updates must not reload it.
@@ -42,6 +48,15 @@ function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic }: P
       }
     } finally { if (run === lifecycle.current.generation) { pending.current = false; setBusy(false); } }
   }
+  async function exportResult(format: 'markdown' | 'pdf') {
+    if (!result || busy || exporting.current) return;
+    exporting.current = true; setSharing(true); setShareError('');
+    try {
+      if (format === 'pdf') await printAsync({ html: analysisHtml(result) });
+      else await Share.share({ title: 'Kaydedilmiş toplantı sonucu', message: analysisMarkdown(result) });
+    } catch { setShareError('Paylaşım tamamlanmadı. Yeniden deneyebilirsiniz.'); }
+    finally { exporting.current = false; setSharing(false); }
+  }
   return <View style={styles.panel}>
     <Text style={styles.title}>Kaydedilmiş toplantı sonucu</Text>
     <Text style={styles.text}>Toplantının sunucuda saklanan en son analizidir; son kayıt denemenizden önceki bir oturuma ait olabilir.</Text>
@@ -67,6 +82,13 @@ function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic }: P
         <Text style={styles.title}>{s.claim}</Text><Text selectable style={styles.text}>{s.text}</Text>
         <Text style={styles.text}>Kaynak {i + 1}</Text>
       </View>) : <Text style={styles.text}>Bu sonuçta kaynak alıntısı bulunmuyor.</Text>)}
+      <Pressable accessibilityRole="button" disabled={busy || sharing} onPress={() => void exportResult('markdown')}>
+        <Text style={styles.link}>Kaydedilmiş sonucu Markdown olarak paylaş</Text>
+      </Pressable>
+      <Pressable accessibilityRole="button" disabled={busy || sharing} onPress={() => void exportResult('pdf')}>
+        <Text style={styles.link}>Kaydedilmiş sonucu PDF / Yazdır</Text>
+      </Pressable>
+      {!!shareError && <Text accessibilityRole="alert" style={styles.text}>{shareError}</Text>}
     </>}
   </View>;
 }
