@@ -15,6 +15,12 @@ KVKK ADR 0030'un saklama, onay ve inceleme koşulları geçerlidir. Anahtar kayb
 hesap değişimi, süre dolumu, uygulama yeniden açılışı ve veritabanı temizliği cihazda
 kanıtlanmadan kalıcı tampon ürün kabulü yapılamaz.
 
+2026-09-15 kaynak düzeltmesi: kapatma hatasında depolama erişimi engellenir;
+anahtar/dosya silinmeden önce veritabanı kapatma yeniden denenir. Eşzamanlı
+temizleme çağrıları tek işlem paylaşır. Anahtar silme başarısızlığı sonraki
+çağrıda yeniden denenebilir. Saklama süresi ve varsayılan kapalı durum değişmez;
+bu düzeltme gerçek cihaz veya kalıcı tampon entegrasyon kabulü değildir.
+
 ## Arka plan
 
 İncelenen expo-audio 57.0.4 Android kaynağında AudioStream.start mikrofon iznini
