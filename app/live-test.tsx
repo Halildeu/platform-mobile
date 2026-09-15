@@ -7,7 +7,8 @@ import { useLocalSearchParams } from 'expo-router';
 import { ForegroundStream, type LiveSocket } from '../src/audio/foregroundStream';
 import { applyTranscriptEvent, type TranscriptLine } from '../src/transcript/transcriptState';
 import { TranscriptView } from '../src/transcript/TranscriptView';
-import { OfflineAudioBuffer } from '../src/audio/offlineBuffer';
+import Constants from 'expo-constants';
+import { createRecordingBuffer } from '../src/audio/recordingBuffer';
 import * as api from '../src/audio/liveTestApi';
 import { NewMeetingForm } from '../src/audio/NewMeetingForm';
 import { configureBackgroundCapture, supportsBackgroundCapture } from '../src/audio/backgroundCapture';
@@ -43,6 +44,7 @@ export default function LiveTestScreen() {
   const analysisReceived = useRef(false);
   const token = useRef<Awaited<ReturnType<typeof api.login>> | null>(null);
   const live = useRef<ForegroundStream | null>(null);
+  const audioBuffer = useRef<Awaited<ReturnType<typeof createRecordingBuffer>> | null>(null);
   const session = useRef<string | null>(null);
   const generation = useRef(0);
   const active = useRef(false);
@@ -115,7 +117,7 @@ export default function LiveTestScreen() {
       setStatus(failure.current ?? (drained ? 'Test bitti. Ekrandaki metni konuşmanızla karşılaştırabilirsiniz.' : 'Test durdu; son sözlerin tamamlandığı doğrulanamadı.'));
     } catch (error) { log(`Kapanış başarısız: ${error instanceof Error ? error.message : 'nedeni alınamadı'}`); setStatus(failure.current ?? 'Test durdu; sunucudaki kapanış doğrulanamadı.'); }
     finally {
-      logTransport(connection);
+      try { logTransport(connection); } catch { log('Ses tamponu sayaçları okunamadı; kapanış temizliği sürüyor.'); }
       log('Analiz aboneliği istemci tarafından kapatılıyor. Sunucu analiz tetikleme/işleme aşamaları telefon tarafından doğrulanamaz.');
       generation.current++;
       stopAnalysis.current?.(); stopAnalysis.current = null;
@@ -125,6 +127,11 @@ export default function LiveTestScreen() {
       }
       if (failure.current) setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | ${failure.current}`].filter((_, index, all) => index < 3 || index >= all.length - 297));
       connection?.dispose();
+      const bufferHandle = audioBuffer.current;
+      if (bufferHandle) {
+        try { log('Ses tamponu kapanışı: ' + await bufferHandle.release()); audioBuffer.current = null; }
+        catch { log('Şifreli tampon temizliği tamamlanamadı; teslim veya silinme doğrulanmadı.'); }
+      }
       void configureBackgroundCapture(false).catch(() => {});
       setBusy(false);
     }
@@ -277,6 +284,7 @@ export default function LiveTestScreen() {
     setAnalysis(null);
     markStage('Mikrofon izni');
     try {
+      if (audioBuffer.current) { await audioBuffer.current.release(); audioBuffer.current = null; }
       markStage('Oturum geçerliliği');
       token.current = await api.validSession(120000);
       if (generation.current !== run) return;
@@ -301,6 +309,19 @@ export default function LiveTestScreen() {
       if (generation.current !== run) { await api.finish(token.current.jwt, id); return; }
       session.current = id;
       setDiagnostics((previous) => [...previous.slice(0, 2), `Ses oturumu: ${id}`, ...previous.slice(2)]);
+      markStage('Ses tamponu hazırlanıyor');
+      const preparedBuffer = await createRecordingBuffer({
+        retentionMs: Constants.expoConfig?.extra?.audioBufferRetentionMs, sessionId: id,
+        ownerScope: () => api.lifecycleOwner(token.current!.jwt),
+        onStorageError: () => {
+          if (generation.current !== run) return;
+          failure.current = 'Şifreli ses tamponuna erişilemedi; kayıt durduruldu.';
+          void stopRef.current('Şifreli depolama hatası');
+        },
+      });
+      if (generation.current !== run || !active.current) { await preparedBuffer.release(); return; }
+      audioBuffer.current = preparedBuffer;
+      log(preparedBuffer.mode === 'memory' ? 'Kalıcı ses tamponu kapalı: saklama süresi tanımlanmadı.' : 'Şifreli ses tamponu hazır.');
       markStage('Ses bağlantısının açılması');
       analysisReceived.current = false;
       stopAnalysis.current = subscribeAnalysis({ baseUrl: api.BASE_URL, meetingId: selected, token: token.current.jwt,
@@ -333,7 +354,7 @@ export default function LiveTestScreen() {
           ? { type: 'final', seq: line.seq, text: line.text }
           : { type: 'partial', seq: line.seq, confirmed: line.confirmed ?? '', tentative: line.tentative ?? line.text }).lines);
       }, (message) => { log(`Ses bağlantısı hatası: ${message}`); failure.current = message; setStatus(message); void stopRef.current('Ses aktarımı veya WebSocket hatası'); },
-      new OfflineAudioBuffer({ maxBytes: 2 * 1024 * 1024, maxChunks: 2000 }), {
+      preparedBuffer.buffer, {
         connect: async () => {
           const refreshed = await api.validSession(30000);
           if (generation.current !== run) throw new Error('Kayıt kapandı.');
