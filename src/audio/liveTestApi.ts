@@ -5,6 +5,7 @@ import { requestFailure } from './requestFailure';
 import { mobileSession } from '../auth/mobileSession';
 import { SessionExpired } from '../auth/sessionManager';
 import { parsePersistedResult } from '../analysis/persistedResult';
+import { disableNativePush } from '../notifications/nativePush';
 
 export const BASE_URL = 'https://testai.acik.com';
 const ISSUER = `${BASE_URL}/realms/platform-test`;
@@ -93,7 +94,11 @@ export async function restoreSession() {
   const value = await mobileSession.valid();
   return value ? { jwt: value.jwt, expiresAt: value.expiresAt } : null;
 }
-export const logout = () => mobileSession.logout();
+export async function logout(): Promise<boolean> {
+  const pushCleared = await disableNativePush().catch(() => false);
+  const sessionCleared = await mobileSession.logout();
+  return pushCleared && sessionCleared;
+}
 export async function validSession(minRemainingMs = 60000): Promise<{ jwt: string; expiresAt: number }> {
   const session = await mobileSession.valid(minRemainingMs);
   if (!session) throw new SessionExpired();
@@ -101,6 +106,9 @@ export async function validSession(minRemainingMs = 60000): Promise<{ jwt: strin
 }
 
 export async function login(): Promise<{ jwt: string; expiresAt: number }> {
+  // Offline cleanup remains pending; never prevent reauthentication needed to finish it.
+  // NativePushManager prevents a different account from taking over that receipt.
+  await disableNativePush().catch(() => false);
   await mobileSession.clear();
   const discovery = await AuthSession.fetchDiscoveryAsync(ISSUER);
   const request = new AuthSession.AuthRequest({

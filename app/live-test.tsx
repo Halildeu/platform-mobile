@@ -18,6 +18,7 @@ import { newerAnalysis, type AnalysisSnapshot } from '../src/analysis/liveAnalys
 import { subscribeAnalysis } from '../src/analysis/analysisSubscription';
 import { PersistedResultPanel } from '../src/analysis/PersistedResultPanel';
 import { saveMeetingView, readMeetingView, clearMeetingViews } from '../src/audio/meetingViewCache';
+import { NativePushSettings } from '../src/notifications/NativePushSettings';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -407,6 +408,7 @@ export default function LiveTestScreen() {
     <Pressable disabled={busy || recording} style={[styles.button, (busy || recording) && styles.disabled]} onPress={() => void signOut()}><Text style={styles.text}>Çıkış yap</Text></Pressable>
     <View>
       {signedIn && <>
+        <NativePushSettings disabled={busy || recording} />
         <NewMeetingForm disabled={busy || recording} onCreate={createMeeting} />
         <Pressable accessibilityRole="button" disabled={busy || recording} onPress={() => void refreshMeetings()}><Text style={styles.text}>Listeyi yenile</Text></Pressable>
       </>}
