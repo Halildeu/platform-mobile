@@ -1,5 +1,25 @@
 # platform-mobile E2E strategy — Faz 24 M6
 
+## 2026-09-18 Android flow isolation
+
+Current Android CI builds a real x86_64 APK and runs both existing Maestro flows.
+Run35341034945 passed transcript replay, then failed app-launch before its first
+UI assertion. Transport evidence shows device -> offline -> absent -> device
+between12:09:31.574Z and12:09:32.330Z, with unchanged host ADB PID. The underlying
+guest/transport reset trigger is not established; this is not an app crash finding.
+
+Each unchanged flow now runs in its own GitHub runner/emulator lifecycle against
+the same SHA/hash-verified APK. Both matrix jobs are required by the aggregate
+android-maestro check; fail-fast is off, no failed flow is retried, and reports are
+kept separately. App-launch plus revised/replayed transcript screenshots remain
+mandatory. A passing artifact build alone cannot satisfy this check. This isolates
+the observed cross-flow transport failure without suppressing app assertions.
+
+The correction still requires new-head native CI evidence. It does not establish
+physical recording, authenticated backend acceptance, iOS or Detox coverage; #1
+cannot be closed solely on these two synthetic Android scenarios. Earlier sections
+below describe historical setup and do not override this current runner description.
+
 ## 2026-09-10 doğrulama düzeltmesi
 
 Önceki metindeki “çalışan smoke”, “macOS matrix” ve yeşil baseline ifadeleri

@@ -108,6 +108,27 @@ test("install failure keeps evidence and never invokes Maestro", (t) => {
   assert.equal(evidence(f).exitCode, 7);
   assert.ok(!existsSync(join(f.cwd, "invoked.json")));
 });
+
+test("isolated flows select exactly one scenario and preserve failures", (t) => {
+  for (const [flow, path] of [
+    ["app-launch", ".maestro/flows/01-app-launch.yaml"],
+    ["transcript-demo", ".maestro/flows/02-transcript-demo.yaml"],
+  ]) {
+    const f = fixture(t);
+    assert.equal(run(f, { MAESTRO_FLOW: flow, MAESTRO_EXIT: "3" }).status, 3);
+    assert.equal(evidence(f).flow, flow);
+    const args = JSON.parse(readFileSync(join(f.cwd, "invoked.json")));
+    assert.equal(args.at(-1), path);
+    assert.ok(!args.includes("--retry"));
+  }
+});
+
+test("unknown flow is rejected before device commands", (t) => {
+  const f = fixture(t);
+  assert.notEqual(run(f, { MAESTRO_FLOW: "../skip-tests" }).status, 0);
+  assert.ok(!existsSync(join(f.cwd, "invoked.json")));
+  assert.ok(!existsSync(join(f.cwd, "artifacts")));
+});
 test("Maestro failure is not hidden by successful diagnostics", (t) => {
   const f = fixture(t);
   assert.equal(run(f, { MAESTRO_EXIT: "3" }).status, 3);
