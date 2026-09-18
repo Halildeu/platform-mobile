@@ -7,6 +7,7 @@ import { useLocalSearchParams } from 'expo-router';
 import { ForegroundStream, type LiveSocket } from '../src/audio/foregroundStream';
 import { applyTranscriptEvent, type TranscriptLine } from '../src/transcript/transcriptState';
 import { TranscriptView } from '../src/transcript/TranscriptView';
+import { SavedTranscript } from '../src/analysis/SavedTranscriptPanel';
 import Constants from 'expo-constants';
 import { createRecordingBuffer } from '../src/audio/recordingBuffer';
 import * as api from '../src/audio/liveTestApi';
@@ -424,7 +425,9 @@ export default function LiveTestScreen() {
       {([['text', 'Metin'], ['summary', 'Özet'], ['decisions', 'Kararlar'], ['actions', 'Aksiyonlar'], ['saved', 'Kaydedilen'], ['diagnostics', 'Tanılama']] as const).map(([key, label]) =>
         <Pressable key={key} accessibilityRole="tab" accessibilityState={{ selected: tab === key }} onPress={() => setTab(key)} style={{ padding: 8, borderBottomWidth: 2, borderBottomColor: tab === key ? '#93c5fd' : 'transparent' }}><Text style={styles.text}>{label}</Text></Pressable>)}
     </View>
-    {tab === 'text' && <View style={{ flex: 1 }}><TranscriptView lines={lines} />{!lines.length && <Text style={styles.note}>Kayıt başladığında konuşmanız burada görünecek.</Text>}</View>}
+    {tab === 'text' && <View style={{ flex: 1 }}>{signedIn && selected && !recording && !busy && !lines.length
+      ? <SavedTranscript meetingId={selected} />
+      : <><TranscriptView lines={lines} />{!lines.length && <Text style={styles.note}>Kayıt başladığında konuşmanız burada görünecek.</Text>}</>}</View>}
     {tab !== 'text' && <ScrollView style={{ flex: 1 }}>
       {tab === 'saved' && signedIn && selected && !recording && !busy && <PersistedResultPanel key={selected} meetingId={selected} onDiagnostic={log} />}
       {tab === 'saved' && (!signedIn || !selected || recording || busy) && <Text style={styles.note}>Kaydı durdurup bir toplantı seçtikten sonra kalıcı sonucu açabilirsiniz.</Text>}

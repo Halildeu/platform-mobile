@@ -5,7 +5,7 @@ import { analysisHtml } from './exportHtml';
 import { analysisMarkdown } from './exportMarkdown';
 import { persistedResult } from '../audio/liveTestApi';
 import type { PersistedResult } from './persistedResult';
-import { SavedTranscript } from './SavedTranscriptPanel';
+
 
 type Props = {
   meetingId: string; load?: (id: string) => Promise<PersistedResult>; onDiagnostic?: (message: string) => void;
@@ -69,7 +69,7 @@ function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic }: P
     {result && <>
       <Text style={styles.text}>Oluşturulma: {result.generatedAt}</Text>
       <Text selectable style={styles.text}>Oturum: {result.sessionId}</Text>
-      {!busy && <SavedTranscript key={result.analysisRunId} meetingId={meetingId} analysisRunId={result.analysisRunId} />}
+
       <Text style={styles.title}>Özet</Text>
       <Text selectable style={styles.text}>{result.summary || 'Bu sonuçta gösterilebilir özet bulunmuyor.'}</Text>
       <Text style={styles.title}>Kararlar</Text>

@@ -1,30 +1,34 @@
-import { useEffect, useRef, useState } from 'react';
-import { Pressable, Text, View } from 'react-native';
-import { savedTranscript } from '../audio/liveTestApi';
+import { useEffect, useState } from 'react';
+import { Pressable, ScrollView, Text } from 'react-native';
+import { persistedResult, savedTranscript } from '../audio/liveTestApi';
 
-export function SavedTranscript({ meetingId, analysisRunId, load = savedTranscript }: {
-  meetingId: string; analysisRunId: string; load?: (meeting: string, run: string) => Promise<string>;
-}) {
+async function loadTranscript(meetingId: string) {
+  const result = await persistedResult(meetingId);
+  return savedTranscript(meetingId, result.analysisRunId);
+}
+
+type Props = { meetingId: string; load?: (meetingId: string) => Promise<string> };
+export function SavedTranscript(props: Props) {
+  return <TranscriptForMeeting key={props.meetingId} {...props} />;
+}
+function TranscriptForMeeting({ meetingId, load = loadTranscript }: Props) {
   const [text, setText] = useState<string | null>(null);
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  const alive = useRef(true);
-  const pending = useRef(false);
-  useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
-  async function open() {
-    if (pending.current) return;
-    pending.current = true; setBusy(true); setText(null); setError('');
-    try {
-      const value = await load(meetingId, analysisRunId);
-      if (alive.current) setText(value);
-    } catch { if (alive.current) setError('Kaydedilen konuşma metni okunamadı. Erişim, saklama süresi veya sunucu durumu kontrol edilmeli.'); }
-    finally { pending.current = false; if (alive.current) setBusy(false); }
-  }
-  return <View>
-    <Pressable accessibilityRole="button" disabled={busy} onPress={() => void open()}>
-      <Text style={{ color: '#93c5fd', paddingVertical: 12 }}>{busy ? 'Konuşma metni okunuyor…' : 'Kaydedilen konuşma metnini aç'}</Text>
-    </Pressable>
-    {!!error && <Text accessibilityRole="alert" style={{ color: '#e2e8f0' }}>{error}</Text>}
-    {text !== null && <Text selectable style={{ color: '#e2e8f0' }}>{text || 'Bu sonuçta konuşma metni boş.'}</Text>}
-  </View>;
+  const [error, setError] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let current = true;
+    void load(meetingId).then(value => { if (current) setText(value); })
+      .catch(() => { if (current) setError(true); });
+    return () => { current = false; };
+  }, [meetingId, load, attempt]);
+  return <ScrollView style={{ flex: 1 }}>
+    {!error && text === null && <Text style={{ color: '#94a3b8' }}>Kaydedilmiş konuşma metni yükleniyor…</Text>}
+    {error && <>
+      <Text accessibilityRole="alert" style={{ color: '#e2e8f0' }}>Kaydedilmiş konuşma metni alınamadı. Sonuç henüz hazır olmayabilir veya erişim sağlanamıyor.</Text>
+      <Pressable accessibilityRole="button" onPress={() => { setError(false); setText(null); setAttempt(value => value + 1); }}>
+        <Text style={{ color: '#93c5fd', paddingVertical: 12 }}>Yeniden dene</Text>
+      </Pressable>
+    </>}
+    {text !== null && <Text selectable style={{ color: '#e2e8f0', fontSize: 16 }}>{text || 'Bu sonuçta konuşma metni boş.'}</Text>}
+  </ScrollView>;
 }
