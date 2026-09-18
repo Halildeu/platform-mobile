@@ -5,6 +5,7 @@ import { requestFailure } from './requestFailure';
 import { mobileSession } from '../auth/mobileSession';
 import { SessionExpired } from '../auth/sessionManager';
 import { parsePersistedResult } from '../analysis/persistedResult';
+import { parseSavedTranscript } from '../analysis/savedTranscript';
 import { disableNativePush } from '../notifications/nativePush';
 
 export const BASE_URL = 'https://testai.acik.com';
@@ -173,6 +174,12 @@ async function request(path: string, jwt: string, body?: object, key?: string, m
 }
 
 export interface Meeting { id: string; title: string }
+export async function savedTranscript(meetingId: string, analysisRunId: string): Promise<string> {
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuid.test(meetingId) || !uuid.test(analysisRunId)) throw new Error('Geçersiz toplantı sonucu.');
+  const session = await validSession(30000);
+  return parseSavedTranscript(await request(`/api/v1/admin/meetings/${meetingId}/intelligence/results/${analysisRunId}/transcript`, session.jwt), meetingId, analysisRunId);
+}
 export async function persistedResult(meetingId: string) {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(meetingId)) throw new Error('Geçersiz toplantı.');
   const session = await validSession(30000);
