@@ -74,6 +74,50 @@ function execute(name, command, args, timeout) {
 }
 
 snapshot("before-install");
+// This synthetic emulator suite does not exercise SMS. The preinstalled Google
+// Messages app produced an ANR dialog over both tested screens (run 35225726786,
+// attempt 2). Disable only that unrelated app, never dismiss our app's errors.
+const messaging = spawnSync(
+  "adb",
+  [
+    "-s",
+    "emulator-5554",
+    "shell",
+    "pm",
+    "list",
+    "packages",
+    "com.google.android.apps.messaging",
+  ],
+  {
+    encoding: "utf8",
+    timeout: 10000,
+  },
+);
+assert.equal(messaging.status, 0, "Cannot inspect emulator SMS package");
+if (
+  messaging.stdout
+    .split(/\r?\n/)
+    .includes("package:com.google.android.apps.messaging")
+) {
+  assert.equal(
+    execute(
+      "disable-unrelated-emulator-messages",
+      "adb",
+      [
+        "-s",
+        "emulator-5554",
+        "shell",
+        "pm",
+        "disable-user",
+        "--user",
+        "0",
+        "com.google.android.apps.messaging",
+      ],
+      10000,
+    ),
+    0,
+  );
+}
 let status = execute(
   "install",
   "adb",
