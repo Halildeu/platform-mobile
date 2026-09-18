@@ -2,6 +2,7 @@ import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { Alert, AppState } from 'react-native';
 import LiveTestScreen from '../../../app/live-test';
 import * as api from '../liveTestApi';
+import { clearMeetingViews, saveMeetingView } from '../meetingViewCache';
 
 const mockStart = jest.fn().mockResolvedValue(undefined);
 const mockStop = jest.fn();
@@ -19,7 +20,7 @@ jest.mock('../backgroundCapture', () => ({ supportsBackgroundCapture: () => fals
 jest.mock('expo-web-browser', () => ({ maybeCompleteAuthSession: jest.fn() }));
 jest.mock('../liveTestApi', () => ({
   login: jest.fn(), meetings: jest.fn(), begin: jest.fn(), finish: jest.fn(), createMeeting: jest.fn(),
-  restoreSession: jest.fn(), validSession: jest.fn(), logout: jest.fn(),
+  restoreSession: jest.fn(), validSession: jest.fn(), logout: jest.fn(), persistedResult: jest.fn(), savedTranscript: jest.fn(),
   BASE_URL: 'https://example.test', CONSENT: 'Test onayı',
 }));
 jest.mock('../../analysis/analysisSubscription', () => ({ subscribeAnalysis: () => jest.fn() }));
@@ -34,6 +35,7 @@ jest.mock('../foregroundStream', () => ({ ForegroundStream: jest.fn().mockImplem
 
 beforeEach(() => {
   jest.clearAllMocks();
+  clearMeetingViews();
   mockParams = {};
   mockDrain.mockResolvedValue(false);
   jest.mocked(api.login).mockResolvedValue({ jwt: 'test-only', expiresAt: Date.now() + 600000 });
@@ -192,4 +194,20 @@ it('defers a different notification meeting while recording and applies it after
   await act(async () => { mockFailure('Kontrollü test kapanışı'); });
   await waitFor(() => expect(screen.getByText('✓ İkinci toplantı')).toBeTruthy());
   expect(api.begin).toHaveBeenCalledTimes(1);
+});
+
+it('restores canonical full text in Metin even when a partial navigation cache exists', async () => {
+  saveMeetingView('meeting-1', { lines: [{ seq: 1, text: 'PARTIAL_CACHE', confirmed: 'PARTIAL_CACHE', tentative: '', status: 'final' }], analysis: null, diagnostics: [] });
+  jest.mocked(api.restoreSession).mockResolvedValue({ jwt: 'test-only', expiresAt: Date.now() + 600000 });
+  jest.mocked(api.persistedResult).mockResolvedValue({ analysisRunId: 'run-1', meetingId: 'meeting-1', sessionId: 'session-1', generatedAt: '2026-09-18T10:00:00Z', summary: '', decisions: [], actions: [], sources: [] });
+  jest.mocked(api.savedTranscript).mockResolvedValue('FULL_SAVED_TRANSCRIPT');
+  const screen = render(<LiveTestScreen />);
+  await waitFor(() => expect(screen.getByText('Test toplantısı')).toBeTruthy());
+  fireEvent.press(screen.getByText('Test toplantısı'));
+  fireEvent.press(screen.getByText('Metin'));
+  await waitFor(() => expect(screen.getByText('FULL_SAVED_TRANSCRIPT')).toBeTruthy());
+  expect(screen.queryByText('PARTIAL_CACHE')).toBeNull();
+  expect(api.savedTranscript).toHaveBeenCalledWith('meeting-1', 'run-1');
+  await act(async () => fireEvent.press(screen.getByText('Çıkış yap')));
+  expect(screen.queryByText('FULL_SAVED_TRANSCRIPT')).toBeNull();
 });

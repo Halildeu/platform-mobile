@@ -1,3 +1,4 @@
+import { FlatList } from 'react-native';
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { SavedTranscript } from '../SavedTranscriptPanel';
 import { parseSavedTranscript } from '../savedTranscript';
@@ -34,4 +35,15 @@ test('rejects another meeting or analysis result', () => {
   expect(parseSavedTranscript(value, 'A', 'run')).toBe('Metin');
   expect(() => parseSavedTranscript(value, 'B', 'run')).toThrow();
   expect(() => parseSavedTranscript(value, 'A', 'other')).toThrow();
+});
+
+test('virtualizes long saved text without dropping or changing characters', async () => {
+  const original = ('Zeynep görevini hazırlayacak. 📝\n').repeat(1000);
+  const load = jest.fn().mockResolvedValue(original);
+  const screen = render(<SavedTranscript meetingId="A" load={load} />);
+  await waitFor(() => expect(screen.UNSAFE_getByType(FlatList)).toBeTruthy());
+  const chunks = screen.UNSAFE_getByType(FlatList).props.data as string[];
+  expect(chunks.length).toBeGreaterThan(4);
+  expect(chunks.join('')).toBe(original);
+  expect(chunks.every(chunk => Array.from(chunk).length <= 2000)).toBe(true);
 });

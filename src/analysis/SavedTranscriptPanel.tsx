@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { Pressable, ScrollView, Text } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { FlatList, Pressable, Text, View } from 'react-native';
 import { persistedResult, savedTranscript } from '../audio/liveTestApi';
 
 async function loadTranscript(meetingId: string) {
@@ -21,7 +21,8 @@ function TranscriptForMeeting({ meetingId, load = loadTranscript }: Props) {
       .catch(() => { if (current) setError(true); });
     return () => { current = false; };
   }, [meetingId, load, attempt]);
-  return <ScrollView style={{ flex: 1 }}>
+  const paragraphs = useMemo(() => text?.match(/[\s\S]{1,2000}/gu) ?? [], [text]);
+  return <View style={{ flex: 1 }}>
     {!error && text === null && <Text style={{ color: '#94a3b8' }}>Kaydedilmiş konuşma metni yükleniyor…</Text>}
     {error && <>
       <Text accessibilityRole="alert" style={{ color: '#e2e8f0' }}>Kaydedilmiş konuşma metni alınamadı. Sonuç henüz hazır olmayabilir veya erişim sağlanamıyor.</Text>
@@ -29,6 +30,9 @@ function TranscriptForMeeting({ meetingId, load = loadTranscript }: Props) {
         <Text style={{ color: '#93c5fd', paddingVertical: 12 }}>Yeniden dene</Text>
       </Pressable>
     </>}
-    {text !== null && <Text selectable style={{ color: '#e2e8f0', fontSize: 16 }}>{text || 'Bu sonuçta konuşma metni boş.'}</Text>}
-  </ScrollView>;
+    {text === '' && <Text style={{ color: '#e2e8f0' }}>Bu sonuçta konuşma metni boş.</Text>}
+    {text !== null && <FlatList data={paragraphs} keyExtractor={(_, index) => String(index)}
+      initialNumToRender={4} windowSize={5}
+      renderItem={({ item }) => <Text selectable style={{ color: '#e2e8f0', fontSize: 16 }}>{item}</Text>} />}
+  </View>;
 }
