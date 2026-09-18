@@ -35,6 +35,8 @@ if (args.includes('track-devices')) {
   }, 30);
   setInterval(() => {}, 1000);
 }
+if (args.includes('packages')) { if (process.env.PACKAGE_PROBE_EXIT) process.exit(9); if (process.env.MESSAGES) console.log('package:com.google.android.apps.messaging'); }
+if (args.includes('disable-user')) { require('node:fs').writeFileSync('disabled.json', JSON.stringify(args)); process.exit(Number(process.env.DISABLE_EXIT || 0)); }
 if (args.includes('install')) process.exit(Number(process.env.INSTALL_EXIT || 0));
 if (args.includes('get-state')) console.log(process.env.STATE || 'device');
 if (args.includes('getprop')) console.log('1');
@@ -213,4 +215,25 @@ test("missing Maestro closes the monitor and preserves executable error", (t) =>
   const result = evidence(f);
   assert.equal(result.steps.find((s) => s.phase === "maestro").error, "ENOENT");
   assert.equal(result.transport.tracker.stoppedByRunner, true);
+});
+
+test("disables only unrelated Messages and preserves successful flows", (t) => {
+  const f = fixture(t);
+  assert.equal(run(f, { MESSAGES: "1" }).status, 0);
+  const args = JSON.parse(readFileSync(join(f.cwd, "disabled.json")));
+  assert.equal(args.at(-1), "com.google.android.apps.messaging");
+  assert.equal(evidence(f).exitCode, 0);
+  assert.ok(existsSync(join(f.cwd, "invoked.json")));
+});
+
+test("failed emulator preparation preserves evidence and never runs flows", (t) => {
+  for (const env of [
+    { PACKAGE_PROBE_EXIT: "1" },
+    { MESSAGES: "1", DISABLE_EXIT: "7" },
+  ]) {
+    const f = fixture(t);
+    assert.notEqual(run(f, env).status, 0);
+    assert.notEqual(evidence(f).exitCode, 0);
+    assert.equal(existsSync(join(f.cwd, "invoked.json")), false);
+  }
 });

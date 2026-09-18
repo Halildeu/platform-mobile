@@ -93,37 +93,36 @@ const messaging = spawnSync(
     timeout: 10000,
   },
 );
-assert.equal(messaging.status, 0, "Cannot inspect emulator SMS package");
+let status = messaging.status ?? 1;
 if (
+  status === 0 &&
   messaging.stdout
     .split(/\r?\n/)
     .includes("package:com.google.android.apps.messaging")
 ) {
-  assert.equal(
-    execute(
-      "disable-unrelated-emulator-messages",
-      "adb",
-      [
-        "-s",
-        "emulator-5554",
-        "shell",
-        "pm",
-        "disable-user",
-        "--user",
-        "0",
-        "com.google.android.apps.messaging",
-      ],
-      10000,
-    ),
-    0,
+  status = execute(
+    "disable-unrelated-emulator-messages",
+    "adb",
+    [
+      "-s",
+      "emulator-5554",
+      "shell",
+      "pm",
+      "disable-user",
+      "--user",
+      "0",
+      "com.google.android.apps.messaging",
+    ],
+    10000,
   );
 }
-let status = execute(
-  "install",
-  "adb",
-  ["-s", "emulator-5554", "install", "-r", "artifacts/apk/app-release.apk"],
-  120000,
-);
+if (status === 0)
+  status = execute(
+    "install",
+    "adb",
+    ["-s", "emulator-5554", "install", "-r", "artifacts/apk/app-release.apk"],
+    120000,
+  );
 snapshot("after-install");
 if (status === 0) {
   const monitor = monitorTransport();
