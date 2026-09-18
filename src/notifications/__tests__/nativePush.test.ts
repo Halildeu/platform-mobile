@@ -1,11 +1,13 @@
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 import * as Notifications from 'expo-notifications';
 import * as SecureStore from 'expo-secure-store';
 import { mobileSession } from '../../auth/mobileSession';
-import { disableNativePush, enableNativePush } from '../nativePush';
+import { disableNativePush, enableNativePush, nativePushConfiguration } from '../nativePush';
 
 jest.mock('expo-constants', () => ({ __esModule: true, default: { expoConfig: {
   android: { package: 'com.workcube.meeting' }, extra: { nativePush: { enabled: true, environment: 'TEST', orgId: 'org' } },
+  ios: { bundleIdentifier: 'com.workcube.meeting' },
 } } }));
 jest.mock('expo-crypto', () => ({ randomUUID: () => '11111111-1111-4111-8111-111111111111',
   CryptoDigestAlgorithm: { SHA256: 'sha256' }, digestStringAsync: async () => 'a'.repeat(64) }));
@@ -15,6 +17,7 @@ jest.mock('expo-notifications', () => ({ AndroidImportance: { DEFAULT: 3 }, setN
 jest.mock('../../auth/mobileSession', () => ({ mobileSession: { valid: jest.fn() } }));
 const fetchMock = jest.fn();
 beforeEach(() => {
+  delete Constants.expoConfig!.extra!.nativePush.platforms;
   jest.clearAllMocks(); Platform.OS = 'android'; global.fetch = fetchMock;
   (SecureStore.getItemAsync as jest.Mock).mockResolvedValue(null);
   (mobileSession.valid as jest.Mock).mockResolvedValue({ jwt: `header.${btoa(JSON.stringify({
@@ -23,6 +26,15 @@ beforeEach(() => {
   (Notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue({ granted: true });
   (Notifications.getDevicePushTokenAsync as jest.Mock).mockResolvedValue({ data: 'device-token' });
   fetchMock.mockResolvedValue({ ok: true, json: async () => ({ status: 'registered', registrationId: '22222222-2222-4222-8222-222222222222' }) });
+});
+it('Android-only TEST configuration never activates unconfigured APNs', () => {
+  Platform.OS = 'ios';
+  expect(nativePushConfiguration()?.provider).toBe('APNS');
+  Platform.OS = 'android';
+  Constants.expoConfig!.extra!.nativePush.platforms = ['android'];
+  expect(nativePushConfiguration()?.provider).toBe('FCM');
+  Platform.OS = 'ios';
+  expect(nativePushConfiguration()).toBeNull();
 });
 it('permission denial never requests or registers a device token', async () => {
   (Notifications.requestPermissionsAsync as jest.Mock).mockResolvedValue({ granted: false });

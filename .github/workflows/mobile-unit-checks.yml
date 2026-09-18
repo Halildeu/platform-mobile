@@ -1,7 +1,7 @@
 name: Mobile unit and type checks
 on:
   pull_request:
-    paths: ['app/**', 'src/**', 'package*.json', 'tsconfig.json', '.github/workflows/mobile-unit-checks.yml']
+    paths: ['app/**', 'src/**', 'app.config.js', 'scripts/fcm-config.check.js', 'package*.json', 'tsconfig.json', '.github/workflows/mobile-unit-checks.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -16,6 +16,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - run: node --test scripts/fcm-config.check.js
       - run: npm test -- --runInBand --coverage --watch=false
       - uses: actions/upload-artifact@v4
         if: always()

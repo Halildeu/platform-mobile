@@ -11,6 +11,10 @@ on:
         options:
           - emulator
           - device
+      fcm_test:
+        description: "Enable isolated Android FCM TEST (requires approved organization and client config)"
+        type: boolean
+        default: false
   pull_request:
     paths:
       - "app/**"
@@ -19,6 +23,8 @@ on:
       - "assets/**"
       - ".maestro/**"
       - "app.json"
+      - "app.config.js"
+      - "scripts/fcm-config.check.js"
       - "package*.json"
       - "babel.config.js"
       - "scripts/e2e-apk*"
@@ -59,6 +65,26 @@ jobs:
         run: node --test scripts/e2e-apk.test.mjs scripts/e2e-maestro.test.mjs
       - name: Install locked dependencies
         run: npm ci
+      - name: Validate FCM build configuration guard
+        run: node --test scripts/fcm-config.check.js
+      - name: Prepare isolated Android FCM TEST configuration
+        if: ${{ inputs.fcm_test }}
+        env:
+          FCM_CLIENT_JSON: ${{ secrets.MOBILE_FCM_TEST_CLIENT_JSON }}
+          TEST_ORG: ${{ vars.MOBILE_NATIVE_PUSH_TEST_ORG_ID }}
+          TARGET: ${{ inputs.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$TARGET" = device
+          test -n "$FCM_CLIENT_JSON"
+          test -n "$TEST_ORG"
+          [[ "$TEST_ORG" != *$'\n'* && "$TEST_ORG" != *$'\r'* ]]
+          umask 077
+          printf '%s' "$FCM_CLIENT_JSON" > "$RUNNER_TEMP/google-services-test.json"
+          echo "MOBILE_FCM_TEST=1" >> "$GITHUB_ENV"
+          echo "MOBILE_FCM_CONFIG_PATH=$RUNNER_TEMP/google-services-test.json" >> "$GITHUB_ENV"
+          echo "MOBILE_NATIVE_PUSH_ORG_ID=$TEST_ORG" >> "$GITHUB_ENV"
       - name: Generate native project from this checkout
         run: npx expo prebuild --platform android --no-install
       - name: Build APK from this checkout

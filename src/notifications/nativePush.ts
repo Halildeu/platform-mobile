@@ -12,6 +12,7 @@ const UUID = /^[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i;
 let accountGeneration = 0;
 export function nativePushConfiguration(): (PushScope & { org: string }) | null {
   const config = Constants.expoConfig?.extra?.nativePush;
+  if (config?.platforms && (!Array.isArray(config.platforms) || !config.platforms.includes(Platform.OS))) return null;
   if (!config || config.enabled !== true || config.environment !== 'TEST' ||
       typeof config.orgId !== 'string' || !config.orgId || config.orgId.length > 64) return null;
   const applicationId = Platform.OS === 'android' ? Constants.expoConfig?.android?.package : Constants.expoConfig?.ios?.bundleIdentifier;
