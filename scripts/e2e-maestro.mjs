@@ -95,7 +95,9 @@ function execute(name, command, args, timeout) {
 snapshot("before-install");
 let status = 0;
 if (collectHealth) {
-  evidence.emulator = [collectEmulatorHealth("before-install", directory)];
+  evidence.emulator = [
+    await collectEmulatorHealth("before-install", directory),
+  ];
   if (!evidence.emulator[0].healthy) status = 1;
 }
 if (status === 0)
@@ -150,7 +152,7 @@ if (status === 0) {
   snapshot("after-maestro");
 }
 if (collectHealth) {
-  const health = collectEmulatorHealth("after-test", directory);
+  const health = await collectEmulatorHealth("after-test", directory);
   evidence.emulator.push(health);
   if (status === 0 && !health.healthy) status = 1;
 }

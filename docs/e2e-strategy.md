@@ -1,5 +1,26 @@
 # platform-mobile E2E strategy — Faz 24 M6
 
+## 2026-09-20 Android UI readiness race
+
+Run 35498487486 on source f220fea built successfully and passed transcript-demo
+(one JUnit test, 25.669s). App-launch stopped before APK installation or Maestro:
+sys.boot_completed became 1 at 08:30:47.732Z, but the 08:30:48.320Z window dump
+still showed mCurrentFocus=null, SDK setup DefaultActivity and FallbackHome.
+All probes succeeded and lastanr reported no ANR since boot. The instantaneous
+preflight incorrectly treated incomplete UI startup as a failed environment.
+
+Before installation only, the collector now allows up to 30 seconds including
+probe duration for setup/null focus to become a usable window. Two consecutive
+usable samples 500ms apart are required; setup resets that sequence. Every probe
+keeps its 5-second maximum and is shortened to the remaining overall deadline.
+ADB/probe failures, malformed window output and focused ANR/error dialogs stop
+immediately. Initial and final window dumps and classified timing observations
+are retained. Postflight does not wait and cannot erase a failed Maestro result.
+This changes startup synchronization, not test assertions or test retries.
+
+New source still requires both isolated native scenarios on the same verified
+APK. The partial result above is not full Android, phone or iOS acceptance.
+
 ## 2026-09-18 Pixel Launcher ANR and environment correction
 
 Run 35344006973 completed with transcript-demo 1/1 passing and app-launch failing
