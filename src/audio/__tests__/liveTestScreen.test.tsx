@@ -24,6 +24,7 @@ jest.mock('expo-audio', () => ({
 jest.mock('expo-router', () => ({ useLocalSearchParams: () => mockParams }));
 jest.mock('../backgroundCapture', () => ({ supportsBackgroundCapture: () => false, configureBackgroundCapture: jest.fn(async () => {}) }));
 jest.mock('expo-web-browser', () => ({ maybeCompleteAuthSession: jest.fn() }));
+jest.mock('../../auth/mobileSession', () => ({ mobileSession: { contentScope: () => 1, snapshot: () => null } }));
 jest.mock('../liveTestApi', () => ({
   login: jest.fn(), meetings: jest.fn(), begin: jest.fn(), finish: jest.fn(), createMeeting: jest.fn(),
   restoreSession: jest.fn(), validSession: jest.fn(), logout: jest.fn(), persistedResult: jest.fn(), savedTranscript: jest.fn(),

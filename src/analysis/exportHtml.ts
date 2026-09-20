@@ -4,6 +4,14 @@ import type { PersistedResult } from './persistedResult';
 const escape = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;')
   .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
+export function transcriptHtml(text: string): string {
+  return `<!DOCTYPE html><html lang="tr"><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
+<title>Kaydedilmiş konuşma metni</title><style>@page { size: A4; margin: 18mm; }
+body { font: 12pt sans-serif; color: #172033; } p { white-space: pre-wrap; overflow-wrap: anywhere; }</style>
+</head><body><h1>Kaydedilmiş konuşma metni</h1><p>${escape(text)}</p></body></html>`;
+}
+
 /** Standalone HTML: no scripts, external fonts/images, or raw server fields. */
 export function analysisHtml(snapshot: AnalysisSnapshot | PersistedResult): string {
   const saved = 'analysisRunId' in snapshot;

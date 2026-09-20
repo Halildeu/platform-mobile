@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { FlatList, Pressable, Text, View } from 'react-native';
 import { persistedResult, savedTranscript } from '../audio/liveTestApi';
+import { mobileSession } from '../auth/mobileSession';
+import { useResultExport } from './useResultExport';
+import { transcriptHtml } from './exportHtml';
 
 async function loadTranscript(meetingId: string) {
   const result = await persistedResult(meetingId);
@@ -15,9 +18,16 @@ function TranscriptForMeeting({ meetingId, load = loadTranscript }: Props) {
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [scope, setScope] = useState<number | null>(null);
+  const exports = useResultExport(scope);
   useEffect(() => {
     let current = true;
-    void load(meetingId).then(value => { if (current) setText(value); })
+    const owner = mobileSession.contentScope();
+    void load(meetingId).then(value => {
+      if (!current) return;
+      if (owner === null || owner !== mobileSession.contentScope()) { setError(true); return; }
+      setScope(owner); setText(value);
+    })
       .catch(() => { if (current) setError(true); });
     return () => { current = false; };
   }, [meetingId, load, attempt]);
@@ -31,6 +41,15 @@ function TranscriptForMeeting({ meetingId, load = loadTranscript }: Props) {
       </Pressable>
     </>}
     {text === '' && <Text style={{ color: '#e2e8f0' }}>Bu sonuçta konuşma metni boş.</Text>}
+    {!!text && <>
+      <Pressable accessibilityRole="button" disabled={exports.working} onPress={() => void exports.copy(text)}>
+        <Text style={{ color: '#93c5fd', paddingVertical: 12 }}>Metnin tamamını kopyala</Text>
+      </Pressable>
+      <Pressable accessibilityRole="button" disabled={exports.working} onPress={() => void exports.pdf(transcriptHtml(text))}>
+        <Text style={{ color: '#93c5fd', paddingVertical: 12 }}>Kaydedilmiş metni PDF olarak paylaş</Text>
+      </Pressable>
+    </>}
+    {!!exports.message && <Text accessibilityRole="alert" style={{ color: '#e2e8f0' }}>{exports.message}</Text>}
     {text !== null && <FlatList data={paragraphs} keyExtractor={(_, index) => String(index)}
       initialNumToRender={4} windowSize={5}
       renderItem={({ item }) => <Text selectable style={{ color: '#e2e8f0', fontSize: 16 }}>{item}</Text>} />}

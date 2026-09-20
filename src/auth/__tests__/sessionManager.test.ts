@@ -13,6 +13,19 @@ function setup() {
 }
 const expired = { jwt: 'old', expiresAt: 900, refreshToken: 'refresh' };
 
+it('content ownership survives refresh but not logout and login to the same account', async () => {
+  const { manager } = setup();
+  expect(manager.contentScope()).toBeNull();
+  await manager.save({ ...expired, expiresAt: 2000 });
+  const first = manager.contentScope();
+  await manager.valid(10000);
+  expect(manager.contentScope()).toBe(first);
+  await manager.clear();
+  expect(manager.contentScope()).toBeNull();
+  await manager.save({ ...expired, expiresAt: 500000 });
+  expect(manager.contentScope()).not.toBe(first);
+});
+
 it('snapshot never loads or renews credentials and disappears during account changes', async () => {
   const { manager, io } = setup();
   expect(manager.snapshot()).toBeNull();

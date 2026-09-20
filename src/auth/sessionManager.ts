@@ -26,6 +26,9 @@ export class SessionManager {
       ? { jwt: value.jwt, expiresAt: value.expiresAt } : null;
   }
 
+  /** Local content ownership generation; contains no credential or user identifier. */
+  contentScope(): number | null { return this.snapshot() ? this.epoch : null; }
+
   private ordered<T>(operation: () => Promise<T>): Promise<T> {
     const next = this.writes.then(operation, operation);
     this.writes = next.catch(() => {});
