@@ -158,3 +158,8 @@ credentials.json
 *.mobileprovision
 *.keystore
 *.jks
+*serviceAccount*.json
+*.pem
+*.key
+release-evidence/
+release-intent.json

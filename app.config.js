@@ -3,6 +3,12 @@ const path = require('node:path');
 
 // Opt-in Android TEST configuration. Never accept server credentials in an APK.
 module.exports = ({ config }) => {
+  // Only new OTA-specific native builds opt in. Existing device builds stay off.
+  if (process.env.MOBILE_OTA_ENABLED === '1') {
+    config = { ...config, runtimeVersion: { policy: 'fingerprint' },
+      updates: { ...config.updates, enabled: true,
+        url: 'https://u.expo.dev/3597d06c-21ec-4908-b453-e72f219d5758' } };
+  }
   if (process.env.MOBILE_FCM_TEST !== '1') return config;
   const file = process.env.MOBILE_FCM_CONFIG_PATH;
   const orgId = process.env.MOBILE_NATIVE_PUSH_ORG_ID;

@@ -1,9 +1,25 @@
 {
   "cli": {
-    "version": ">= 13.0.0",
+    "version": "24.7.0",
     "appVersionSource": "remote"
   },
   "build": {
+    "ota-development": {
+      "extends": "preview",
+      "channel": "development",
+      "environment": "development",
+      "env": { "MOBILE_OTA_ENABLED": "1" }
+    },
+    "ota-preview": {
+      "extends": "preview",
+      "environment": "preview",
+      "env": { "MOBILE_OTA_ENABLED": "1" }
+    },
+    "ota-production": {
+      "extends": "production",
+      "environment": "production",
+      "env": { "MOBILE_OTA_ENABLED": "1" }
+    },
     "simulator": {
       "extends": "preview",
       "ios": { "simulator": true }
