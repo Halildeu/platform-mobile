@@ -3,8 +3,9 @@ import { readSpeakerAttributionForDuration, SpeakerNumbering, type SpeakerAttrib
 export type SavedTranscriptSegment = { text: string | null; speakerAttribution?: SpeakerAttribution };
 export type SavedTranscriptDocument = {
   meetingId: string; analysisRunId: string; text: string; segments?: SavedTranscriptSegment[];
+  sessionId?: string; finalizationVersion?: number; transcriptSha256?: string;
 };
-export type SavedTranscriptRow = { text: string; speaker?: number | 'unknown' };
+export type SavedTranscriptRow = { text: string; speaker?: number | 'unknown'; speakerKey?: { scope: string; speaker: string } };
 const object = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value);
 
 export function parseSavedTranscript(value: unknown, meetingId: string, analysisRunId: string): SavedTranscriptDocument {
@@ -15,7 +16,10 @@ export function parseSavedTranscript(value: unknown, meetingId: string, analysis
       typeof p.transcriptSha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(p.transcriptSha256))
     throw new Error('Konuşma metni seçilen sonuçla eşleşmiyor.');
   const text = p.transcript;
-  return { meetingId, analysisRunId, text, segments: readSegments(p, text) };
+  return { meetingId, analysisRunId, text, segments: readSegments(p, text),
+    sessionId: typeof p.sessionId === 'string' ? p.sessionId : undefined,
+    finalizationVersion: typeof p.finalizationVersion === 'number' ? p.finalizationVersion : undefined,
+    transcriptSha256: p.transcriptSha256 };
 }
 
 /** An older server or an invalid optional projection must not hide the canonical full text. */
@@ -68,7 +72,8 @@ export function savedTranscriptRows(document: SavedTranscriptDocument): SavedTra
       const from = index === 0 ? 0 : turns[index - 1].textEnd;
       const end = index === turns.length - 1 ? text.length : turn.textEnd;
       const speaker = numbers.number(scope, turn.speaker) ?? 'unknown';
-      rows.push(...chunks((index === 0 ? prefix : '') + text.slice(from, end), speaker));
+      rows.push(...chunks((index === 0 ? prefix : '') + text.slice(from, end), speaker)
+        .map(row => speaker === 'unknown' ? row : { ...row, speakerKey: { scope, speaker: turn.speaker } }));
     });
   }
   return rows;
