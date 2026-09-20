@@ -1,12 +1,4 @@
-// Faz 24 M6 mobile E2E — Detox app-launch smoke (skeleton).
-//
-// Kept intentionally minimal: a launch + visibility check that mirrors
-// the primary Maestro flow (.maestro/flows/01-app-launch.yaml). Wire
-// this once the Expo prebuild is committed and `eas build --profile
-// development` produces the .app / .apk that Detox consumes.
-//
-// A green run of BOTH this Detox spec and the Maestro flow provides
-// two-track E2E coverage (see docs/e2e-strategy.md § two-track).
+// Native Detox handshake + real unauthenticated home; no physical device claim.
 
 import { by, device, element, expect as detoxExpect } from 'detox';
 
@@ -21,5 +13,6 @@ describe('app-launch', () => {
   it('renders the actual home screen', async () => {
     await detoxExpect(element(by.id('app-root'))).toBeVisible();
     await detoxExpect(element(by.id('app-home-title'))).toBeVisible();
+    await device.takeScreenshot('detox-home-visible');
   });
 });

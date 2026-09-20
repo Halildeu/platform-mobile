@@ -1,5 +1,15 @@
 # platform-mobile E2E strategy — Faz 24 M6
 
+## 2026-09-20 native Detox execution
+
+The new isolated Android/iOS workflow generates native projects without committing
+prebuild output. Android instrumentation, explicit app/test APK verification and
+iOS simulator selection are implemented; real native compatibility results are
+still required. See [native Detox smoke](mobile-detox.md) and ADR0016 for evidence
+requirements and the unverified RN0.86.3/Detox20.51.4 combination. Historical
+statements below about requiring committed prebuilds/EAS dev-client no longer
+describe the source setup. Physical acceptance remains separate.
+
 ## 2026-09-20 headless emulator detection regression
 
 [Run35514381900](https://github.com/Halildeu/platform-mobile/actions/runs/35514381900)

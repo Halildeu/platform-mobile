@@ -3,6 +3,12 @@ const path = require('node:path');
 
 // Opt-in Android TEST configuration. Never accept server credentials in an APK.
 module.exports = ({ config }) => {
+  if (process.env.MOBILE_DETOX_E2E === '1') {
+    if (process.env.MOBILE_FCM_TEST === '1' || process.env.MOBILE_OTA_ENABLED === '1') {
+      throw new Error('Isolated Detox builds cannot enable FCM or OTA');
+    }
+    config = { ...config, plugins: [...(config.plugins || []), './plugins/withDetoxE2E.cjs'] };
+  }
   // Only new OTA-specific native builds opt in. Existing device builds stay off.
   if (process.env.MOBILE_OTA_ENABLED === '1') {
     config = { ...config, runtimeVersion: { policy: 'fingerprint' },
