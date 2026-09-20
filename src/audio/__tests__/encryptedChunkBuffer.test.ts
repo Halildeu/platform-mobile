@@ -6,7 +6,9 @@ import { join, resolve, dirname, basename } from 'node:path';
 import * as SQLite from 'expo-sqlite';
 import * as SecureStore from 'expo-secure-store';
 import { bufferJournal, BUFFER_JOURNAL_KEY } from '../nativeBufferJournal';
-import { openEncryptedChunkBuffer, sweepEncryptedChunkBuffers } from '../encryptedChunkBuffer';
+import { openEncryptedChunkBuffer, reopenEncryptedChunkBuffer, sweepEncryptedChunkBuffers } from '../encryptedChunkBuffer';
+import { replayPendingAudio } from '../pendingAudioReplay';
+import type { LiveSocket } from '../foregroundStream';
 import { createRecordingBuffer } from '../recordingBuffer';
 
 let mockDirectory: string;
@@ -257,4 +259,98 @@ test('native SQL/key error text is never returned to the screen', async () => {
   expect(close).toHaveBeenCalledTimes(1);
   expect((await bufferJournal.list())[0].state).toBe('creating');
   await sweepEncryptedChunkBuffers();
+});
+
+test('reopen preserves original identity, bytes, timestamps and TTL and disallows new capture', async () => {
+  const opts = options(); const fresh = await openEncryptedChunkBuffer(opts);
+  fresh.buffer.enqueue({ ...pcm, chunkSeq: 77 }); fresh.close();
+  const original = new DatabaseSync(file(opts.sessionId));
+  const row = original.prepare('SELECT * FROM pending_audio_chunks').get(); original.close();
+  const writes = jest.mocked(SecureStore.setItemAsync).mock.calls.length;
+  const reopened = await reopenEncryptedChunkBuffer({ ownerScope, sessionId: opts.sessionId, maxChunks: 2 });
+  expect(SecureStore.setItemAsync).toHaveBeenCalledTimes(writes);
+  expect(reopened).not.toHaveProperty('confirmDrained'); expect(reopened).not.toHaveProperty('destroy');
+  expect(() => reopened.buffer.enqueue(pcm)).toThrow('yeni ses');
+  const sent: unknown[] = []; reopened.buffer.drain(value => { sent.push(value); return true; });
+  expect(sent).toEqual([{ chunkSeq: 77, capturedAtMs: 1, pcm16: pcm.pcm16, enqueuedAtMs: row!.enqueued_at_ms }]);
+  reopened.close();
+  jest.setSystemTime(Number(row!.enqueued_at_ms) + 1001);
+  await expect(reopenEncryptedChunkBuffer({ ownerScope, sessionId: opts.sessionId, maxChunks: 2 })).rejects.toThrow('doğrulanamadı');
+  expect((await bufferJournal.list())[0].state).toBe('lost');
+  await sweepEncryptedChunkBuffers(); expect(existsSync(file(opts.sessionId))).toBe(false);
+});
+
+test.each(['owner', 'session', 'key', 'file', 'lost', 'drained', 'creating', 'deleting'] as const)(
+  'recovery rejects %s mismatch/state before opening native storage', async failure => {
+    const opts = options(); const handle = await openEncryptedChunkBuffer(opts); handle.buffer.enqueue(pcm); handle.close();
+    let restoreOwner = ownerScope; let sessionId = opts.sessionId;
+    if (failure === 'owner') restoreOwner = 'b'.repeat(64);
+    else if (failure === 'session') sessionId += '-foreign';
+    else if (failure === 'key') stored.delete(key(sessionId));
+    else if (failure === 'file') rmSync(file(sessionId));
+    else {
+      const id = identity(sessionId); const lease = bufferJournal.acquire(id)!;
+      await bufferJournal.edit(id, lease, row => ({ ...row!, state: failure,
+        ...(failure === 'deleting' ? { outcome: 'lost' as const } : {}) }));
+      bufferJournal.release(id, lease);
+    }
+    await expect(reopenEncryptedChunkBuffer({ ownerScope: restoreOwner, sessionId, maxChunks: 2 })).rejects.toThrow('doğrulanamadı');
+    expect(SQLite.openDatabaseSync).toHaveBeenCalledTimes(1);
+    const id = await bufferJournal.identity(restoreOwner, sessionId); const lease = bufferJournal.acquire(id)!;
+    expect(lease).not.toBeNull(); bufferJournal.release(id, lease);
+  });
+
+test.each(['table', 'loss-table', 'loss-row', 'seq', 'captured', 'enqueued', 'blob', 'loss'] as const)(
+  'recovery fails closed on damaged %s without repairing it', async failure => {
+    const opts = options(); const handle = await openEncryptedChunkBuffer(opts); handle.buffer.enqueue(pcm); handle.close();
+    const sql: Record<typeof failure, string> = {
+      table: 'DROP TABLE pending_audio_chunks', 'loss-table': 'DROP TABLE audio_buffer_loss',
+      'loss-row': 'DELETE FROM audio_buffer_loss', seq: 'UPDATE pending_audio_chunks SET chunk_seq = -1',
+      captured: 'UPDATE pending_audio_chunks SET captured_at_ms = -1',
+      enqueued: 'UPDATE pending_audio_chunks SET enqueued_at_ms = -1',
+      blob: "UPDATE pending_audio_chunks SET pcm16 = X'01'", loss: 'UPDATE audio_buffer_loss SET expired = 1',
+    };
+    const db = new DatabaseSync(file(opts.sessionId)); db.exec(sql[failure]); db.close();
+    await expect(reopenEncryptedChunkBuffer({ ownerScope, sessionId: opts.sessionId, maxChunks: 2 })).rejects.toThrow('doğrulanamadı');
+    expect(handles[1].close).toHaveBeenCalledTimes(1);
+    await expect(bufferJournal.assertFinishAllowed(ownerScope, opts.sessionId)).rejects.toThrow('Bekleyen');
+    if (failure === 'table' || failure === 'loss-table' || failure === 'loss-row') {
+      const check = new DatabaseSync(file(opts.sessionId));
+      if (failure === 'loss-row') expect(check.prepare('SELECT * FROM audio_buffer_loss').all()).toEqual([]);
+      else expect(check.prepare("SELECT name FROM sqlite_master WHERE name = ?").get(
+        failure === 'table' ? 'pending_audio_chunks' : 'audio_buffer_loss')).toBeUndefined();
+      check.close();
+    }
+  });
+
+test('recovery owns one lease through native-close failure and retries exact handle', async () => {
+  const opts = options(); const initial = await openEncryptedChunkBuffer(opts); initial.close();
+  const recovered = await reopenEncryptedChunkBuffer({ ownerScope, sessionId: opts.sessionId, maxChunks: 2 });
+  handles[1].close.mockImplementationOnce(() => { throw new Error('busy'); });
+  expect(() => recovered.close()).toThrow('doğrulanamadı');
+  await expect(reopenEncryptedChunkBuffer({ ownerScope, sessionId: opts.sessionId, maxChunks: 2 })).rejects.toThrow('başka bir işlem');
+  await sweepEncryptedChunkBuffers(); expect(SQLite.openDatabaseSync).toHaveBeenCalledTimes(2);
+  recovered.close(); expect(handles[1].close).toHaveBeenCalledTimes(2);
+});
+
+test('recovered gateway drain cannot grant canonical finish, even after reopen and sweep', async () => {
+  const opts = options(); const initial = await openEncryptedChunkBuffer(opts); initial.buffer.enqueue(pcm); initial.close();
+  const recovered = await reopenEncryptedChunkBuffer({ ownerScope, sessionId: opts.sessionId, maxChunks: 2 });
+  const ws: LiveSocket = { readyState: 1, bufferedAmount: 0, onopen: null, onmessage: null, onerror: null,
+    onclose: null, send: jest.fn(), close: jest.fn() };
+  const attempt = replayPendingAudio(ws, recovered.buffer);
+  ws.onmessage?.({ data: '{"type":"ready"}' }); await jest.advanceTimersByTimeAsync(250);
+  ws.onmessage?.({ data: '{"type":"audio_ack","chunk_seq":0}' });
+  ws.onmessage?.({ data: '{"type":"drained"}' });
+  expect(await attempt.result).toEqual({ state: 'gateway-drained', historyComplete: false });
+  expect(recovered.buffer.pending()).toBe(0); recovered.close(); await sweepEncryptedChunkBuffers();
+  expect((await bufferJournal.list())[0].state).toBe('ready');
+  await expect(bufferJournal.assertFinishAllowed(ownerScope, opts.sessionId)).rejects.toThrow('Bekleyen');
+});
+
+test('startup cleanup cannot manufacture a missing queue table and pass future recovery', async () => {
+  const opts = options(); const initial = await openEncryptedChunkBuffer(opts); initial.close();
+  const db = new DatabaseSync(file(opts.sessionId)); db.exec('DROP TABLE pending_audio_chunks'); db.close();
+  await expect(sweepEncryptedChunkBuffers()).rejects.toThrow('Bazı');
+  await expect(reopenEncryptedChunkBuffer({ ownerScope, sessionId: opts.sessionId, maxChunks: 2 })).rejects.toThrow('doğrulanamadı');
 });

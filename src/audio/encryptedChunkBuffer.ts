@@ -57,32 +57,59 @@ async function erase(record: BufferRecord, lease: symbol): Promise<void> {
   try { await eraseFiles(record, lease); } catch { throw storageFailure(); }
 }
 
-/** Explicit owner retention policy + SQLCipher are required. No cold replay is implied. */
-export async function openEncryptedChunkBuffer(options: {
+type BufferOptions = {
   ownerScope: string; sessionId: string; retentionMs?: number; maxChunks: number; maxBytes?: number;
   onStorageError?: () => void;
-}) {
-  validateBufferPolicy(options.retentionMs, options.maxChunks);
+};
+
+/** New capture requires an explicit policy; recovery uses the original journal policy. */
+export function openEncryptedChunkBuffer(options: BufferOptions) {
+  return openNativeBuffer(options, 'create');
+}
+
+/** Replay cannot certify historic STT completeness or grant canonical FINISHED permission. */
+export async function reopenEncryptedChunkBuffer(options: Omit<BufferOptions, 'retentionMs'>) {
+  const handle = await openNativeBuffer(options, 'existing');
+  return { buffer: handle.buffer, close: handle.close };
+}
+
+async function openNativeBuffer(options: BufferOptions, mode: 'create' | 'existing') {
+  if (mode === 'create') validateBufferPolicy(options.retentionMs, options.maxChunks);
+  else if (!Number.isSafeInteger(options.maxChunks) || options.maxChunks <= 0) throw new Error('Geçersiz tampon sınırı.');
   const id = await bufferJournal.identity(options.ownerScope, options.sessionId);
   const lease = bufferJournal.acquire(id);
   if (!lease) throw new Error('Ses tamponu başka bir işlem tarafından kullanılıyor.');
-  const record: BufferRecord = { id, ownerHash: options.ownerScope, sessionId: options.sessionId,
+  let record: BufferRecord = { id, ownerHash: options.ownerScope, sessionId: options.sessionId,
     retentionMs: options.retentionMs!, state: 'creating' };
   let db: SQLite.SQLiteDatabase | undefined;
   let leaseHeld = true;
   const releaseLease = () => { if (leaseHeld) { bufferJournal.release(id, lease); leaseHeld = false; } };
   try {
-    await bufferJournal.edit(id, lease, existing => {
-      if (existing) throw new Error('Bu ses oturumu zaten kayıtlı; kurtarma gerekli.');
-      return record;
-    });
-    if (anyFileExists(id) || await SecureStore.getItemAsync(keyName(id)) !== null) {
-      await bufferJournal.edit(id, lease, row => ({ ...row!, state: 'lost' }));
-      throw new Error('Önceki ses deposu bulundu; yeni dosya ile değiştirilemez.');
+    let key: string;
+    if (mode === 'existing') {
+      const existing = (await bufferJournal.list()).find(row => row.id === id);
+      if (!existing || existing.state !== 'ready' || existing.ownerHash !== options.ownerScope ||
+          existing.sessionId !== options.sessionId) throw storageFailure();
+      record = existing;
+      const originalKey = await SecureStore.getItemAsync(keyName(id));
+      if (!fileExists(id) || !originalKey || !/^[a-f0-9]{64}$/.test(originalKey)) {
+        await bufferJournal.edit(id, lease, row => ({ ...row!, state: 'lost' }));
+        throw storageFailure();
+      }
+      key = originalKey;
+    } else {
+      await bufferJournal.edit(id, lease, existing => {
+        if (existing) throw new Error('Bu ses oturumu zaten kayıtlı; kurtarma gerekli.');
+        return record;
+      });
+      if (anyFileExists(id) || await SecureStore.getItemAsync(keyName(id)) !== null) {
+        await bufferJournal.edit(id, lease, row => ({ ...row!, state: 'lost' }));
+        throw new Error('Önceki ses deposu bulundu; yeni dosya ile değiştirilemez.');
+      }
+      key = Array.from(Crypto.getRandomBytes(32), byte => byte.toString(16).padStart(2, '0')).join('');
+      await SecureStore.setItemAsync(keyName(id), key, { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
+      if (await SecureStore.getItemAsync(keyName(id)) !== key) throw new Error('Ses anahtarı doğrulanamadı.');
     }
-    const key = Array.from(Crypto.getRandomBytes(32), byte => byte.toString(16).padStart(2, '0')).join('');
-    await SecureStore.setItemAsync(keyName(id), key, { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
-    if (await SecureStore.getItemAsync(keyName(id)) !== key) throw new Error('Ses anahtarı doğrulanamadı.');
     db = SQLite.openDatabaseSync(fileName(id));
     unlock(db, key);
     const database = db;
@@ -102,9 +129,17 @@ export async function openEncryptedChunkBuffer(options: {
       getAllSync: <T>(sql: string, params: SQLite.SQLiteBindValue[] = []) => { assertOpen(); return database.getAllSync<T>(sql, params); },
       getFirstSync: <T>(sql: string, params: SQLite.SQLiteBindValue[] = []) => { assertOpen(); return database.getFirstSync<T>(sql, params); },
     };
-    const buffer = new OfflineAudioBuffer({ store: new SqliteChunkStore(adapter), ttlMs: options.retentionMs,
+    const buffer = new OfflineAudioBuffer({ store: new SqliteChunkStore(adapter, mode), ttlMs: record.retentionMs,
       maxChunks: options.maxChunks, maxBytes: options.maxBytes });
-    await bufferJournal.edit(id, lease, row => {
+    if (mode === 'existing') {
+      buffer.freezeCapture();
+      buffer.purgeExpired();
+      if (buffer.purged() || buffer.dropped()) {
+        await bufferJournal.edit(id, lease, row => ({ ...row!, state: 'lost' }));
+        throw storageFailure();
+      }
+      if (buffer.pending() > options.maxChunks || buffer.bytes() > (options.maxBytes ?? 8 * 1024 * 1024)) throw storageFailure();
+    } else await bufferJournal.edit(id, lease, row => {
       if (row?.state !== 'creating') throw new Error('Ses deposu başlangıcı doğrulanamadı.');
       return { ...row, state: 'ready' };
     });
@@ -116,7 +151,7 @@ export async function openEncryptedChunkBuffer(options: {
         try { closeDatabase(); } catch { /* keep the lease for exact-handle retry */ }
         try { options.onStorageError?.(); } catch { /* already stopped storage */ }
       }
-    }, Math.min(options.retentionMs!, 60000));
+    }, Math.min(record.retentionMs, 60000));
     let destroying: Promise<void> | undefined;
     let destroyed = false;
     let terminal: 'drained' | 'lost' | undefined;
@@ -197,7 +232,7 @@ export async function sweepEncryptedChunkBuffers(): Promise<void> {
         getAllSync: <T>(sql: string, params: SQLite.SQLiteBindValue[] = []) => database.getAllSync<T>(sql, params),
         getFirstSync: <T>(sql: string, params: SQLite.SQLiteBindValue[] = []) => database.getFirstSync<T>(sql, params),
       };
-      const buffer = new OfflineAudioBuffer({ store: new SqliteChunkStore(adapter), ttlMs: record.retentionMs });
+      const buffer = new OfflineAudioBuffer({ store: new SqliteChunkStore(adapter, 'existing'), ttlMs: record.retentionMs });
       buffer.purgeExpired();
       const lost = buffer.purged() > 0 || buffer.dropped() > 0;
       db.closeSync(); db = undefined;

@@ -102,6 +102,9 @@ export class OfflineAudioBuffer {
   private droppedTotal = 0;
   private purgedTotal = 0;
   private sealed = false;
+  private captureFrozen = false;
+  /** Recovery can acknowledge/purge existing rows, but cannot append fresh microphone audio. */
+  freezeCapture(): void { this.captureFrozen = true; }
   /** Prevent all future queue mutation once its terminal receipt is being persisted. */
   seal(): void { this.sealed = true; }
   private assertMutable(): void { if (this.sealed) throw new Error('Ses tamponu kapanışı doğrulanıyor.'); }
@@ -126,6 +129,7 @@ export class OfflineAudioBuffer {
    */
   enqueue(chunk: PendingChunk): void {
     this.assertMutable();
+    if (this.captureFrozen) throw new Error('Kurtarma tamponuna yeni ses eklenemez.');
     if (!Number.isSafeInteger(chunk.chunkSeq) || chunk.chunkSeq < 0 || !Number.isSafeInteger(chunk.capturedAtMs) || chunk.capturedAtMs < 0 ||
       !chunk.pcm16.length || chunk.pcm16.length % 2 || chunk.pcm16.length > this.maxBytes) throw new Error('Invalid PCM chunk');
     this.purgeExpired();
