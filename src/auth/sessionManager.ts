@@ -55,38 +55,53 @@ export class SessionManager {
     try { await task; } finally { if (this.loading === task) this.loading = undefined; }
   }
   async save(value: Session): Promise<Session> {
+    const snapshot = { ...value }; // Caller-owned objects must not change identity during persistence.
     const epoch = ++this.epoch;
     this.loaded = true; this.current = null; this.refreshing = undefined;
-    await this.ordered(() => value.refreshToken ? this.io.write(JSON.stringify(value)) : this.io.remove());
+    await this.ordered(() => snapshot.refreshToken ? this.io.write(JSON.stringify(snapshot)) : this.io.remove());
     if (epoch !== this.epoch) throw new SessionExpired();
-    this.current = value;
-    return { ...value };
+    this.current = snapshot;
+    return { ...snapshot };
   }
   async valid(minRemainingMs = 60000): Promise<Session | null> {
+    if (!Number.isSafeInteger(minRemainingMs) || minRemainingMs < 0) throw new SessionUnavailable();
     await this.restore();
     const value = this.current;
     if (!value) return null;
     if (value.expiresAt - this.now() > minRemainingMs) return { ...value };
     if (!value.refreshToken) { await this.clear(); throw new SessionExpired(); }
-    if (this.refreshing) return this.refreshing;
     const epoch = this.epoch;
+    const task = this.refreshing ?? this.refresh(value, epoch);
+    try {
+      const next = await task;
+      // Every waiter has its own deadline and observes logout/account replacement.
+      if (epoch !== this.epoch || this.current !== next) throw new SessionExpired();
+      if (next.expiresAt - this.now() <= minRemainingMs) throw new SessionUnavailable();
+      return { ...next };
+    } finally { if (this.refreshing === task) this.refreshing = undefined; }
+  }
+  private refresh(value: Session, epoch: number): Promise<Session> {
     const task = (async () => {
       try {
         const result = await this.io.refresh(value.refreshToken!);
         if (epoch !== this.epoch) throw new SessionExpired();
         const next = { ...result, refreshToken: result.refreshToken ?? value.refreshToken, idToken: result.idToken ?? value.idToken };
-        if (!next.jwt || !Number.isFinite(next.expiresAt) || next.expiresAt - this.now() <= minRemainingMs) throw new SessionUnavailable();
+        if (typeof next.jwt !== 'string' || !next.jwt || !Number.isFinite(next.expiresAt) || next.expiresAt <= 0 ||
+            typeof next.refreshToken !== 'string' || !next.refreshToken ||
+            (next.idToken !== undefined && (typeof next.idToken !== 'string' || !next.idToken))) throw new SessionUnavailable();
+        // Persist valid rotation independently of any caller's required access-token lifetime.
+        // Even expiry during network/storage latency must not restore the superseded refresh token.
         await this.ordered(() => epoch === this.epoch ? this.io.write(JSON.stringify(next)) : Promise.resolve());
         if (epoch !== this.epoch) throw new SessionExpired();
         this.current = next;
-        return { ...next };
+        return next; // Internal only; valid() returns a separate copy to each waiter.
       } catch (error) {
         if (error instanceof SessionExpired && epoch === this.epoch) await this.clear();
         throw error instanceof SessionExpired ? error : new SessionUnavailable();
       }
     })();
     this.refreshing = task;
-    try { return await task; } finally { if (this.refreshing === task) this.refreshing = undefined; }
+    return task;
   }
   async clear(): Promise<void> {
     ++this.epoch; this.loaded = true; this.current = null; this.refreshing = undefined;
