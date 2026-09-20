@@ -17,3 +17,11 @@ credentials.json
 *.mobileprovision
 *.keystore
 *.jks
+*-service-account*.json
+*serviceAccount*.json
+*.pem
+*.key
+.firebase/
+dist-*/
+release-evidence/
+release-intent.json
