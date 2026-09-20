@@ -20,6 +20,7 @@ import { newerAnalysis, type AnalysisSnapshot } from '../src/analysis/liveAnalys
 import { subscribeAnalysis } from '../src/analysis/analysisSubscription';
 import { PersistedResultPanel } from '../src/analysis/PersistedResultPanel';
 import { saveMeetingView, readMeetingView, clearMeetingViews } from '../src/audio/meetingViewCache';
+import { PendingRecordingPanel } from '../src/audio/PendingRecordingPanel';
 import { NativePushSettings } from '../src/notifications/NativePushSettings';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -112,20 +113,29 @@ export default function LiveTestScreen() {
     setStatus('Son sözler bekleniyor…');
     const connection = live.current;
     const id = session.current;
+    if (id) api.captureStopped(id);
+    let waitedForAnalysis = false;
     setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | Durdurma istendi`].filter((_, index, all) => index < 3 || index >= all.length - 297));
     live.current = null;
     session.current = null;
     try {
-      const drained = await connection?.stop();
+      let drained = false;
+      try { drained = !!(await connection?.stop()); }
+      catch { log('Ses akışının kapanışı doğrulanamadı; eksiksiz kapanış gönderilmeyecek.'); }
       log(`Ses akışı kapanış sonucu: ${drained ? 'drained doğrulandı' : 'drained doğrulanamadı'}`);
-      if (drained) await audioBuffer.current?.confirmDrained();
-      if (id && token.current) { log('HTTP kayıt kapanışı başlatıldı'); token.current = await api.validSession(15000); await api.finish(token.current.jwt, id); log('HTTP kayıt kapanışı: FINISHED yanıtı doğrulandı'); }
-      if (!failure.current && stopAnalysis.current && !analysisReceived.current) {
+      let complete = !!drained && !!connection?.completionConfirmed();
+      if (complete) {
+        try { await audioBuffer.current?.confirmDrained(); }
+        catch { complete = false; log('Kapanış kanıtı cihazda saklanamadı; kayıt eksik olarak korunuyor.'); }
+      }
+      if (id && token.current) { log('HTTP kayıt kapanışı başlatıldı'); token.current = await api.validSession(15000); const closed = await api.completeCapture(token.current.jwt, id, complete); log(closed ? 'HTTP kayıt kapanışı: FINISHED yanıtı doğrulandı' : 'Kayıt eksik; sunucuya tamamlandı gönderilmedi.'); }
+      if (complete && !failure.current && stopAnalysis.current && !analysisReceived.current) {
+        waitedForAnalysis = true;
         setStatus('Ses kaydı bitti; analiz sonucu en fazla 20 saniye bekleniyor…');
         setAnalysisStatus('Son metin parçaları işlendi; analiz sonucu bekleniyor.');
         await new Promise<void>(resolve => setTimeout(resolve, 20_000));
       }
-      setStatus(failure.current ?? (drained ? 'Test bitti. Ekrandaki metni konuşmanızla karşılaştırabilirsiniz.' : 'Test durdu; son sözlerin tamamlandığı doğrulanamadı.'));
+      setStatus(failure.current ?? (complete ? 'Test bitti. Ekrandaki metni konuşmanızla karşılaştırabilirsiniz.' : 'Test durdu; son sözlerin tamamlandığı doğrulanamadı.'));
     } catch (error) { log(`Kapanış başarısız: ${error instanceof Error ? error.message : 'nedeni alınamadı'}`); setStatus(failure.current ?? 'Test durdu; sunucudaki kapanış doğrulanamadı.'); }
     finally {
       try { logTransport(connection); } catch { log('Ses tamponu sayaçları okunamadı; kapanış temizliği sürüyor.'); }
@@ -134,7 +144,7 @@ export default function LiveTestScreen() {
       stopAnalysis.current?.(); stopAnalysis.current = null;
       if (!analysisReceived.current && !failure.current) {
         setAnalysisStatus('Canlı analiz sonucu gelmedi. Tanılama kaydındaki analiz aşamasını sunucu kaydıyla eşleştirin.');
-        setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | Canlı analiz sonucu 20 saniyede gelmedi`].filter((_, index, all) => index < 3 || index >= all.length - 297));
+        log(waitedForAnalysis ? 'Canlı analiz sonucu 20 saniyede gelmedi' : 'Eksik kapanış nedeniyle nihai analiz beklenmedi.');
       }
       if (failure.current) setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | ${failure.current}`].filter((_, index, all) => index < 3 || index >= all.length - 297));
       connection?.dispose();
@@ -334,7 +344,7 @@ export default function LiveTestScreen() {
       if (generation.current !== run) return;
       if (['background'].includes(AppState.currentState)) throw new Error('Kaydı başlatmak için uygulamaya dönün.');
       const id = await api.begin(token.current.jwt, selected, markStage);
-      if (generation.current !== run) { await api.finish(token.current.jwt, id); return; }
+      if (generation.current !== run) { await api.completeCapture(token.current.jwt, id, true); return; }
       session.current = id;
       setDiagnostics((previous) => [...previous.slice(0, 2), `Ses oturumu: ${id}`, ...previous.slice(2)]);
       markStage('Ses tamponu hazırlanıyor');
@@ -414,6 +424,9 @@ export default function LiveTestScreen() {
   return <View style={styles.page}>
     <Text style={styles.title}>Toplantı</Text>
     <Text style={styles.text}>{status}</Text>
+    {signedIn && !recording && !busy && <PendingRecordingPanel beforeResolve={async () => {
+      if (audioBuffer.current) { await audioBuffer.current.release(); audioBuffer.current = null; }
+    }} />}
     {recording && <Text accessibilityRole="alert" style={styles.recording}>● Mikrofon açık · Kayıt sürüyor</Text>}
     <Pressable accessibilityRole="button" onPress={() => setSetup(!setup)}><Text style={styles.selected}>{setup ? 'Toplantı ayarlarını gizle' : 'Toplantı seç / ayarlar'}</Text></Pressable>
     {setup && <View>

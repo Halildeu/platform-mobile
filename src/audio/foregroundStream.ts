@@ -33,6 +33,9 @@ export class ForegroundStream {
   private everReady = false;
   private connectionGeneration = 0;
   private retries = 0;
+  private continuityLost = false;
+  /** Same uninterrupted provider bridge, not merely the most recent gateway receipt. */
+  completionConfirmed(): boolean { return !!this.telemetry.drainedUtc && !this.continuityLost; }
   private telemetry = { capturedBuffers: 0, capturedBytes: 0, sentFrames: 0, acknowledgedFrames: 0,
     lastSentSeq: -1, lastAckSeq: -1, partialEvents: 0, finalEvents: 0,
     lastCaptureUtc: '', lastSendUtc: '', lastAckUtc: '', lastTextUtc: '',
@@ -41,7 +44,7 @@ export class ForegroundStream {
   diagnostics() {
     return { ...this.telemetry, generatedFrames: this.seq, pendingFrames: this.pendingFrames(),
       expiredFrames: this.buffer?.purged() ?? 0, evictedFrames: this.buffer?.dropped() ?? 0,
-      deliveryReceiptsAvailable: !!this.buffer, reconnectAttempts: this.retries };
+      deliveryReceiptsAvailable: !!this.buffer, reconnectAttempts: this.retries, continuityLost: this.continuityLost };
   }
 
   private pendingFrames(): number | null {
@@ -205,6 +208,7 @@ export class ForegroundStream {
   }
 
   private closed(code?: number): void {
+    if (this.everReady) this.continuityLost = true;
     this.telemetry.closeCode = Number.isInteger(code) ? code! : 0;
     if (this.recovery && this.buffer && this.everReady && !this.stopping && (code === 1006 || code === undefined) && this.retries < 3) {
       this.ready = false; this.reconnecting = true; this.transportError = true;

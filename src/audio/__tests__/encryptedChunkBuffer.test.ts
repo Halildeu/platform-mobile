@@ -6,7 +6,7 @@ import { join, resolve, dirname, basename } from 'node:path';
 import * as SQLite from 'expo-sqlite';
 import * as SecureStore from 'expo-secure-store';
 import { bufferJournal, BUFFER_JOURNAL_KEY } from '../nativeBufferJournal';
-import { openEncryptedChunkBuffer, reopenEncryptedChunkBuffer, sweepEncryptedChunkBuffers } from '../encryptedChunkBuffer';
+import { discardAbandonedBuffer, openEncryptedChunkBuffer, reopenEncryptedChunkBuffer, sweepEncryptedChunkBuffers } from '../encryptedChunkBuffer';
 import { replayPendingAudio } from '../pendingAudioReplay';
 import type { LiveSocket } from '../foregroundStream';
 import { createRecordingBuffer } from '../recordingBuffer';
@@ -353,4 +353,16 @@ test('startup cleanup cannot manufacture a missing queue table and pass future r
   const db = new DatabaseSync(file(opts.sessionId)); db.exec('DROP TABLE pending_audio_chunks'); db.close();
   await expect(sweepEncryptedChunkBuffers()).rejects.toThrow('Bazı');
   await expect(reopenEncryptedChunkBuffer({ ownerScope, sessionId: opts.sessionId, maxChunks: 2 })).rejects.toThrow('doğrulanamadı');
+});
+
+test('explicit abandonment erases retained audio only after releasing its native handle', async () => {
+  const o = options(); const handle = await openEncryptedChunkBuffer(o);
+  handle.buffer.enqueue(pcm);
+  await expect(discardAbandonedBuffer(ownerScope, o.sessionId)).rejects.toThrow();
+  expect(existsSync(file(o.sessionId))).toBe(true);
+  handle.close();
+  await discardAbandonedBuffer(ownerScope, o.sessionId);
+  expect(existsSync(file(o.sessionId))).toBe(false); expect(stored.has(key(o.sessionId))).toBe(false);
+  expect((await bufferJournal.list()).some(row => row.sessionId === o.sessionId)).toBe(false);
+  await discardAbandonedBuffer(ownerScope, o.sessionId);
 });

@@ -73,6 +73,7 @@ function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic }: P
     </Pressable>
     {!!error && <Text accessibilityRole="alert" style={styles.text}>{error}</Text>}
     {result && <>
+      {!!result.incompleteRecordingCount && <Text accessibilityRole="alert" style={styles.text}>Bu toplantıda eksik kapatılan kayıt var; sonuç konuşmanın tamamını kapsamayabilir.</Text>}
       <Text style={styles.text}>Oluşturulma: {result.generatedAt}</Text>
       <Text selectable style={styles.text}>Oturum: {result.sessionId}</Text>
 

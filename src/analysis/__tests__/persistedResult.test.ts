@@ -15,3 +15,11 @@ test('withholds unverified summary and refuses invalid source evidence', () => {
   expect(parsePersistedResult({ ...response, summary_grounding_status: 'withheld' }, id).summary).toBe('');
   expect(() => parsePersistedResult({ ...response, citations: [{ claim: 'Karar', source_text: 'Kaynak', grounded: false, status: 'FAILED' }] }, id)).toThrow();
 });
+
+test('keeps incomplete-session scope across selection of a different result', () => {
+  expect(parsePersistedResult({ ...response, incompleteRecordingCount: 2 }, id).incompleteRecordingCount).toBe(2);
+  expect(parsePersistedResult(response, id).incompleteRecordingCount).toBeUndefined();
+  for (const value of [-1, 1.5, '1', null]) {
+    expect(() => parsePersistedResult({ ...response, incompleteRecordingCount: value }, id)).toThrow();
+  }
+});

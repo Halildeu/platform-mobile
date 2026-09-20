@@ -194,6 +194,22 @@ async function openNativeBuffer(options: BufferOptions, mode: 'create' | 'existi
   }
 }
 
+/** Only after canonical incomplete + gateway abandon acknowledgements; never records delivered audio. */
+export async function discardAbandonedBuffer(ownerHash: string, sessionId: string): Promise<void> {
+  const id = await bufferJournal.identity(ownerHash, sessionId);
+  failedOpens.get(id)?.();
+  const lease = bufferJournal.acquire(id);
+  if (!lease) throw storageFailure();
+  try {
+    const record = (await bufferJournal.list()).find(row => row.id === id);
+    if (!record) return;
+    await bufferJournal.edit(id, lease, row => row ? { ...row, state: 'lost', outcome: undefined } : undefined);
+    await erase({ ...record, state: 'lost' }, lease);
+    await bufferJournal.edit(id, lease, () => undefined);
+  } catch { throw storageFailure(); }
+  finally { bufferJournal.release(id, lease); }
+}
+
 /** Runs on next app execution/foreground, not while the OS has terminated the process. */
 export async function sweepEncryptedChunkBuffers(): Promise<void> {
   let failed = false;

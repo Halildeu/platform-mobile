@@ -10,11 +10,11 @@ jest.mock('expo-audio', () => ({ AudioModule: { requestRecordingPermissionsAsync
 jest.mock('expo-router', () => ({ useLocalSearchParams: () => ({}) }));
 jest.mock('../backgroundCapture', () => ({ supportsBackgroundCapture: () => false, configureBackgroundCapture: async () => {} }));
 jest.mock('expo-web-browser', () => ({ maybeCompleteAuthSession: jest.fn() }));
-jest.mock('../liveTestApi', () => ({ login: jest.fn(), meetings: jest.fn(), begin: jest.fn(), finish: jest.fn(), restoreSession: jest.fn(), validSession: jest.fn(), logout: jest.fn(), BASE_URL: 'https://example.test', CONSENT: 'Synthetic consent' }));
+jest.mock('../liveTestApi', () => ({ login: jest.fn(), meetings: jest.fn(), begin: jest.fn(), finish: jest.fn(), completeCapture: jest.fn(), captureStopped: jest.fn(), pendingRecording: jest.fn(async () => null), abandonRecording: jest.fn(), restoreSession: jest.fn(), validSession: jest.fn(), logout: jest.fn(), BASE_URL: 'https://example.test', CONSENT: 'Synthetic consent' }));
 jest.mock('../../transcript/TranscriptView', () => ({ TranscriptView: ({ lines }: { lines: { text: string }[] }) => <MockText>{lines.map(l => l.text).join(' ')}</MockText> }));
 jest.mock('../../analysis/LiveAnalysisPanel', () => ({ LiveAnalysisPanel: ({ snapshot }: { snapshot: { summary: string } | null }) => <MockText>{snapshot?.summary}</MockText> }));
 jest.mock('../../analysis/analysisSubscription', () => ({ subscribeAnalysis: (options: { onSnapshot: typeof mockSnapshot }) => { mockSnapshot = options.onSnapshot; return jest.fn(); } }));
-jest.mock('../foregroundStream', () => ({ ForegroundStream: jest.fn().mockImplementation((_socket, ready, text) => { mockText = text; ready(); return { stop: async () => true, dispose: jest.fn(), diagnostics: () => ({}) }; }) }));
+jest.mock('../foregroundStream', () => ({ ForegroundStream: jest.fn().mockImplementation((_socket, ready, text) => { mockText = text; ready(); return { stop: async () => true, dispose: jest.fn(), completionConfirmed: () => true, diagnostics: () => ({}) }; }) }));
 
 beforeEach(() => {
   jest.clearAllMocks();
@@ -23,7 +23,7 @@ beforeEach(() => {
   jest.mocked(api.validSession).mockResolvedValue(token);
   jest.mocked(api.meetings).mockResolvedValue([{ id: 'meeting-A', title: 'Meeting A' }, { id: 'meeting-B', title: 'Meeting B' }]);
   jest.mocked(api.begin).mockResolvedValue('synthetic-session-A');
-  jest.mocked(api.finish).mockResolvedValue(undefined);
+  jest.mocked(api.completeCapture).mockResolvedValue(true);
   Object.defineProperty(AppState, 'currentState', { configurable: true, value: 'active' });
 });
 afterEach(() => jest.restoreAllMocks());
