@@ -14,7 +14,7 @@ export interface LiveSocket {
   close(): void;
 }
 
-/** Foreground PoC: fail closed on disconnect; no offline delivery guarantee. */
+/** Gateway receipts authorize deletion; any observed audio loss prevents successful drain. */
 export class ForegroundStream {
   private ready = false;
   private stopping = false;
@@ -39,8 +39,40 @@ export class ForegroundStream {
     eofUtc: '', drainedUtc: '', closeCode: 0 };
 
   diagnostics() {
-    return { ...this.telemetry, generatedFrames: this.seq, pendingFrames: this.buffer?.pending() ?? 0,
+    return { ...this.telemetry, generatedFrames: this.seq, pendingFrames: this.pendingFrames(),
+      expiredFrames: this.buffer?.purged() ?? 0, evictedFrames: this.buffer?.dropped() ?? 0,
       deliveryReceiptsAvailable: !!this.buffer, reconnectAttempts: this.retries };
+  }
+
+  private pendingFrames(): number | null {
+    try { return this.buffer?.pending() ?? 0; }
+    catch { return null; } // Unknown must not look like an empty, fully delivered queue.
+  }
+
+  private guard(work: () => void): void {
+    if (this.finished) return;
+    try { work(); }
+    catch { this.fail('Ses akışı işlenemedi; eksiksiz teslim doğrulanamadı.'); }
+  }
+
+  private bufferIntact(purge = true): boolean {
+    if (this.finished) return false;
+    if (!this.buffer) return true;
+    try {
+      if (purge) this.buffer.purgeExpired();
+      // Cumulative evidence also covers a separate TTL timer or a previous drain.
+      // Never reset it on reconnect, a late receipt, or an empty queue.
+      if (this.buffer.purged() > 0) {
+        this.fail('Ses saklama süresi doldu; eksiksiz teslim doğrulanamadı.'); return false;
+      }
+      if (this.buffer.dropped() > 0) {
+        this.fail('Ses tamponu sınırına ulaşıldı; kayıp oluştuğu için test durduruldu.'); return false;
+      }
+      this.buffer.pending(); // Detect a closed/unreadable adapter even without TTL.
+      return true;
+    } catch {
+      this.fail('Ses tamponuna erişilemedi; eksiksiz teslim doğrulanamadı.'); return false;
+    }
   }
 
   constructor(
@@ -60,17 +92,17 @@ export class ForegroundStream {
     this.opened = false;
     this.transportError = false;
     this.errorTimer = undefined;
-    this.timer = setTimeout(() => this.reconnecting ? this.closed(1006) : this.fail('Ses sunucusu hazır olmadı.'), 15000);
-    socket.onmessage = (event) => { if (generation === this.connectionGeneration) this.receive(event.data); };
+    this.timer = setTimeout(() => this.guard(() => this.reconnecting ? this.closed(1006) : this.fail('Ses sunucusu hazır olmadı.')), 15000);
+    socket.onmessage = (event) => { if (generation === this.connectionGeneration) this.guard(() => this.receive(event.data)); };
     socket.onopen = () => { if (generation === this.connectionGeneration) this.opened = true; };
     socket.onerror = () => {
       if (generation !== this.connectionGeneration || this.finished) return;
       // Native transports often emit close with a useful code immediately after error.
       this.transportError = true;
-      if (!this.errorTimer) this.errorTimer = setTimeout(() => this.closed(), 500);
+      if (!this.errorTimer) this.errorTimer = setTimeout(() => this.guard(() => this.closed()), 500);
     };
     socket.onclose = (event) => {
-      if (!this.finished && generation === this.connectionGeneration) this.closed(event?.code);
+      if (!this.finished && generation === this.connectionGeneration) this.guard(() => this.closed(event?.code));
     };
   }
 
@@ -80,6 +112,7 @@ export class ForegroundStream {
     this.telemetry.lastCaptureUtc = new Date().toISOString();
     const recovering = !!this.recovery && !!this.buffer && this.everReady && (this.reconnecting || this.transportError);
     if ((!this.ready && !recovering) || this.stopping || this.finished || (this.transportError && !recovering)) return false;
+    if (!this.bufferIntact()) return false;
     if (sampleRate !== 16000 || channels !== 1 || !data.byteLength || data.byteLength % 2 !== 0) {
       this.fail('Mikrofon gerekli ses biçimini sağlayamadı. Test durduruldu.');
       return false;
@@ -93,11 +126,8 @@ export class ForegroundStream {
       for (let offset = 0; offset < bytes.length; offset += 32000) {
         const chunk = { chunkSeq: this.seq++, capturedAtMs, pcm16: bytes.subarray(offset, offset + 32000) };
         if (this.buffer) {
-          const lost = this.buffer.dropped() + this.buffer.purged();
           this.buffer.enqueue(chunk);
-          if (lost !== this.buffer.dropped() + this.buffer.purged()) {
-            this.fail('Ses tamponu sınırına ulaşıldı; kayıp oluştuğu için test durduruldu.'); return false;
-          }
+          if (!this.bufferIntact()) return false;
           if (this.waitingSince === undefined) this.waitingSince = Date.now();
           this.flushQueue();
           if (this.finished) return false;
@@ -112,6 +142,7 @@ export class ForegroundStream {
 
   stop(): Promise<boolean> {
     if (this.finished || this.stopping) return Promise.resolve(false);
+    if (!this.bufferIntact()) return Promise.resolve(false);
     this.stopping = true;
     clearTimeout(this.retryTimer);
     if (this.reconnecting) ++this.connectionGeneration;
@@ -121,11 +152,12 @@ export class ForegroundStream {
     return new Promise((resolve) => {
       this.stopResolve = resolve;
       this.timer = setTimeout(() => this.fail('Son metin onayı alınamadı.'), 12000);
-      this.sendEofWhenAcknowledged();
+      this.guard(() => this.sendEofWhenAcknowledged());
     });
   }
 
   dispose(): void {
+    if (this.finished) return;
     this.finished = true;
     ++this.connectionGeneration;
     clearTimeout(this.retryTimer);
@@ -135,34 +167,36 @@ export class ForegroundStream {
     clearInterval(this.flushTimer);
     this.stopResolve?.(false);
     this.stopResolve = undefined;
-    this.socket.close();
+    try { this.socket.close(); } catch { /* Cleanup and failure delivery must still complete. */ }
   }
 
   private fail(message: string): void {
     if (this.finished) return;
-    const pending = this.buffer?.pending() ?? 0;
+    const pending = this.pendingFrames();
     this.dispose();
-    this.onFailure(pending ? `${message}\nGateway teslim onayı bekleyen ses parçası: ${pending}. Eksiksiz teslim doğrulanmadı.` : message);
+    const detail = pending === null ? '\nBekleyen ses parçası sayısı okunamadı; teslim doğrulanmadı.'
+      : pending > 0 ? `\nGateway teslim onayı bekleyen ses parçası: ${pending}. Eksiksiz teslim doğrulanmadı.` : '';
+    try { this.onFailure(message + detail); } catch { /* Transport is already stopped; never re-enter failure. */ }
   }
 
   private sendEofWhenAcknowledged(): void {
-    if (!this.stopping || this.finished || this.eofSent || (this.buffer?.pending() ?? 0) > 0) return;
+    if (!this.stopping || this.finished || this.eofSent || !this.bufferIntact() || (this.buffer?.pending() ?? 0) > 0) return;
     this.eofSent = true;
     try { this.socket.send(JSON.stringify({ type: 'eof' })); this.telemetry.eofUtc = new Date().toISOString(); }
     catch { this.fail('Son metin onayı alınamadı.'); }
   }
 
   private flushQueue(): void {
-    if (!this.buffer || this.finished || this.transportError || this.eofSent || (!this.ready && !this.stopping)) return;
-    if (this.buffer.purgeExpired() > 0) {
-      this.fail('Ses saklama süresi doldu; eksiksiz teslim doğrulanamadı.'); return;
-    }
+    if (!this.buffer || this.finished || !this.bufferIntact()) return;
+    if (this.transportError || this.eofSent || (!this.ready && !this.stopping)) return;
     let sendFailed = false;
     this.buffer.drain((pending) => {
+      if (!this.bufferIntact(false)) return false;
       if (this.socket.readyState !== 1 || this.socket.bufferedAmount > 128000) return false;
       try { this.socket.send(encodeGatewayLivePcm16Frame(pending)); this.sent(pending.chunkSeq); return true; }
       catch { sendFailed = true; return false; }
     });
+    if (!this.bufferIntact()) return;
     if (sendFailed) { this.fail('Ses gönderimi başarısız oldu; teslim onayı alınamadı.'); return; }
     if (this.buffer.pending() && this.waitingSince !== undefined && Date.now() - this.waitingSince >= 10000) {
       this.fail('Ses teslimi 10 saniyedir ilerlemiyor. Bağlantı veya sunucu kabulü doğrulanamadı.'); return;
@@ -174,24 +208,26 @@ export class ForegroundStream {
     this.telemetry.closeCode = Number.isInteger(code) ? code! : 0;
     if (this.recovery && this.buffer && this.everReady && !this.stopping && (code === 1006 || code === undefined) && this.retries < 3) {
       this.ready = false; this.reconnecting = true; this.transportError = true;
-      clearTimeout(this.timer); clearTimeout(this.errorTimer); clearInterval(this.flushTimer);
+      clearTimeout(this.timer); clearTimeout(this.errorTimer);
       const generation = ++this.connectionGeneration;
-      this.socket.close();
+      try { this.socket.close(); } catch { /* Invalidate old callbacks and continue bounded recovery. */ }
       const attempt = ++this.retries;
       this.recovery.onStatus(`Ses bağlantısı kesildi; ses geçici tamponda bekliyor. Yeniden bağlantı ${attempt}/3.`);
-      this.retryTimer = setTimeout(() => {
+      this.retryTimer = setTimeout(() => this.guard(() => {
         if (this.finished || this.stopping || generation !== this.connectionGeneration) return;
         this.timer = setTimeout(() => {
-          if (!this.finished && !this.stopping && generation === this.connectionGeneration) this.closed(1006);
+          if (!this.finished && !this.stopping && generation === this.connectionGeneration) this.guard(() => this.closed(1006));
         }, 15000);
         void this.recovery!.connect().then(socket => {
-          if (this.finished || this.stopping || generation !== this.connectionGeneration) { socket.close(); return; }
+          if (this.finished || this.stopping || generation !== this.connectionGeneration) {
+            try { socket.close(); } catch { /* The obsolete socket must never join the active stream. */ } return;
+          }
           clearTimeout(this.timer);
           this.bind(socket);
         }).catch(() => {
-          if (!this.finished && !this.stopping && generation === this.connectionGeneration) this.closed(1006);
+          if (!this.finished && !this.stopping && generation === this.connectionGeneration) this.guard(() => this.closed(1006));
         });
-      }, 500 * 2 ** (attempt - 1));
+      }), 500 * 2 ** (attempt - 1));
       return;
     }
     const validCode = Number.isInteger(code) && code! >= 1000 && code! <= 4999;
@@ -209,6 +245,7 @@ export class ForegroundStream {
     let event: Record<string, unknown>;
     try { event = JSON.parse(raw); } catch { return; }
     if (!event || typeof event !== 'object') return;
+    if (!this.bufferIntact()) return;
     if (event.type === 'ready' && !this.ready && !this.stopping) {
       clearTimeout(this.timer);
       this.ready = true;
@@ -216,7 +253,7 @@ export class ForegroundStream {
       this.transportError = false;
       this.buffer?.resetInFlight();
       this.waitingSince = this.buffer?.pending() ? Date.now() : undefined;
-      if (this.buffer) this.flushTimer = setInterval(() => this.flushQueue(), 250);
+      if (this.buffer && !this.flushTimer) this.flushTimer = setInterval(() => this.guard(() => this.flushQueue()), 250);
       if (this.everReady) {
         this.recovery?.onStatus('Ses bağlantısı yeniden kuruldu; bekleyen parçalar gönderiliyor.');
         this.flushQueue();

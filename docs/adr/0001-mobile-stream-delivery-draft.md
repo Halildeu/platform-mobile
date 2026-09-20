@@ -53,3 +53,25 @@ Kapalı veritabanlarının yeniden açılışta keşfi/TTL temizliği ve hesap d
 kabulü henüz yoktur; süre belirlenmesi tek başına etkinleştirme kabulü sayılmaz.
 Bu kontroller tamamlanana kadar yapılandırma boş tutulmalıdır. Kayıt akışı
 bellek tamponuyla devam eder; #7 kapanış veya gerçek cihaz kabulü iddiası yoktur.
+
+## 2026-09-20 süre dolumu ve teslim hatası
+
+Bağımsız TTL temizleyicisinin sildiği onaylanmamış parça, boş kuyruk üzerinden
+başarılı EOF/drained sonucuna dönüşemez. Akış, oturum tamponunun toplam süre
+dolumu/kapasite kaybını başlangıç, gönderim, ACK, drain ve kapanışta kontrol eder;
+yeniden bağlanma bu kanıtı sıfırlamaz. Reconnect sırasında gözlem sürer ve
+mikrofon olayı gelmese bile süresi dolmuş ses için kayıt durur. `drain()` içindeki
+ikinci purge de gönderimden önce kontrol edilir. Kısmi silme hatasında daha önce
+silinen satırların kayıp sayacı korunur.
+
+Okunamayan/kapalı tampon sayacı `0` yerine bilinmiyor olarak raporlanır. Depolama,
+socket kapatma veya hata callback'i başarısız olsa da akış timer'ları iptal edilir
+ve bekleyen stop sonucu false olur; ham hata/konuşma/anahtar tanılamaya eklenmez.
+Kalıcı tampon kapalıyken kullanılan bellek kuyruğu release sırasında temizlenir.
+Bu temizleme, teslim onayı değildir. Saklama değeri eklenmez veya değiştirilmez.
+
+Kalıcı kurtarma için hâlâ gerekli: sahip/oturum bazlı keşif kaydı, kapalı tampon
+TTL temizliği, uygulama yeniden açılışında sıra ve ACK korunarak replay,
+logout/hesap değişimi ve gateway/canonical finish ile güvenli sıralama. Özellikle
+başarısız drain sonrası HTTP finish/reopen yolu incelenmeden eski kayıt kurtarıldı
+denemez. Bu değişiklik bu kalan şartları veya cihaz kabulünü karşılamaz.

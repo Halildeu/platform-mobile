@@ -39,3 +39,13 @@ test('empty buffer cleanup failure can be retried', async () => {
   expect(await result.release()).toBe('removed');
   expect(f.handle.destroy).toHaveBeenCalledTimes(2);
 });
+
+test('releasing unconfigured memory storage clears retained PCM, without claiming gateway delivery', async () => {
+  const f = fixture(); f.options.retentionMs = undefined;
+  const handle = await createRecordingBuffer(f.options, f.open);
+  handle.buffer.enqueue({ chunkSeq: 0, capturedAtMs: 0, pcm16: new Uint8Array([1, 2]) });
+  expect(await handle.release()).toBe('memory');
+  expect(handle.buffer.bytes()).toBe(0);
+  expect(handle.buffer.pending()).toBe(0);
+  expect(f.open).not.toHaveBeenCalled();
+});

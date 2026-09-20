@@ -20,8 +20,9 @@ type Open = (options: {
 export async function createRecordingBuffer(options: Options, open?: Open) {
   const limits = { maxBytes: 2 * 1024 * 1024, maxChunks: 2000 };
   if (options.retentionMs === undefined || options.retentionMs === null) {
-    return { mode: 'memory' as const, buffer: new OfflineAudioBuffer(limits),
-      release: async () => 'memory' as const };
+    const buffer = new OfflineAudioBuffer(limits);
+    return { mode: 'memory' as const, buffer,
+      release: async () => { buffer.clear(); return 'memory' as const; } };
   }
   if (typeof options.retentionMs !== 'number' || !Number.isSafeInteger(options.retentionMs) || options.retentionMs <= 0) {
     throw new Error('Ses saklama süresi geçersiz; kayıt başlatılmadı.');

@@ -150,9 +150,10 @@ export class OfflineAudioBuffer {
         this.store.remove(chunk.chunkSeq);
         this.inFlight.delete(chunk.chunkSeq);
         purged += 1;
+        // Preserve evidence if deleting a later row throws; an earlier loss is real.
+        this.purgedTotal += 1;
       }
     }
-    this.purgedTotal += purged;
     return purged;
   }
 
