@@ -81,7 +81,7 @@ export default function LiveTestScreen() {
   function logTransport(connection: ForegroundStream | null) {
     if (!connection) { log('Ses taşıma bağlantısı oluşturulmadı.'); return; }
     const d = connection.diagnostics();
-    log(`Ses: mikrofon tamponu=${d.capturedBuffers}, bayt=${d.capturedBytes}, üretilen parça=${d.generatedFrames}, gönderim denemesi=${d.sentFrames} (tekrarlar dahil), gateway onaylı=${d.acknowledgedFrames}, bekleyen=${d.pendingFrames}; son gönderilen sıra=${d.lastSentSeq}, son onay sırası=${d.lastAckSeq}`);
+    log(`Ses: mikrofon tamponu=${d.capturedBuffers}, bayt=${d.capturedBytes}, üretilen parça=${d.generatedFrames}, gönderim denemesi=${d.sentFrames} (tekrarlar dahil), gateway onaylı=${d.acknowledgedFrames}, bekleyen=${d.pendingFrames ?? 'okunamadı'}, süresi dolan=${d.expiredFrames}, kapasite nedeniyle silinen=${d.evictedFrames}; son gönderilen sıra=${d.lastSentSeq}, son onay sırası=${d.lastAckSeq}`);
     log(`Son mikrofon=${d.lastCaptureUtc || 'yok'}; son gönderim=${d.lastSendUtc || 'yok'}; son gateway onayı=${d.lastAckUtc || 'yok'}; son metin=${d.lastTextUtc || 'yok'}; geçici metin olayı=${d.partialEvents}, kesin metin olayı=${d.finalEvents}`);
     log(`Ses sonu gönderimi=${d.eofUtc || 'yok'}; drained onayı=${d.drainedUtc || 'yok'}; WebSocket kapanış kodu=${d.closeCode || 'gözlenmedi'}; analiz sonucu sayısı=${analysisCount.current}. Gateway onayı STT/analiz tamamlandı anlamına gelmez.`);
   }
