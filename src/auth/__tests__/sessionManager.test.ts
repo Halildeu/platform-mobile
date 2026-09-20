@@ -1,6 +1,6 @@
 import { SessionManager, SessionExpired, SessionUnavailable, type Session } from '../sessionManager';
 
-function setup() {
+function setup(now = () => 1000) {
   let stored: string | null = null;
   const io = {
     read: jest.fn(async () => stored),
@@ -9,7 +9,7 @@ function setup() {
     refresh: jest.fn<Promise<Session>, [string]>().mockResolvedValue({ jwt: 'new', expiresAt: 500000, refreshToken: 'rotated' }),
     revoke: jest.fn<Promise<void>, [Session]>().mockResolvedValue(undefined),
   };
-  return { io, manager: new SessionManager(io, () => 1000), stored: () => stored };
+  return { io, manager: new SessionManager(io, now), stored: () => stored };
 }
 const expired = { jwt: 'old', expiresAt: 900, refreshToken: 'refresh' };
 
@@ -104,4 +104,72 @@ it('an old request rejection does not clear a newer account session', async () =
   await manager.save({ ...expired, jwt: 'new-account', expiresAt: 500000 });
   await manager.reject('old-account');
   expect((await manager.valid())?.jwt).toBe('new-account');
+});
+
+it.each([false, true])('checks each concurrent lifetime requirement and retains rotation (strict first=%s)', async strictFirst => {
+  const { io, manager, stored } = setup(); await manager.save(expired);
+  io.refresh.mockResolvedValueOnce({ jwt: 'short', expiresAt: 31000, refreshToken: 'rotated-short' });
+  const thresholds = strictFirst ? [120000, 15000] : [15000, 120000];
+  const results = await Promise.allSettled(thresholds.map(threshold => manager.valid(threshold)));
+  const strict = results[thresholds.indexOf(120000)]; const shorter = results[thresholds.indexOf(15000)];
+  expect(strict).toMatchObject({ status: 'rejected', reason: new SessionUnavailable() });
+  expect(shorter).toMatchObject({ status: 'fulfilled', value: { jwt: 'short' } });
+  expect(io.refresh).toHaveBeenCalledTimes(1);
+  expect(JSON.parse(stored()!).refreshToken).toBe('rotated-short');
+  await manager.valid(120000);
+  expect(io.refresh).toHaveBeenLastCalledWith('rotated-short');
+});
+
+it('rechecks the clock after persistence while retaining the rotated refresh token', async () => {
+  let now = 1000;
+  const { io, manager, stored } = setup(() => now); await manager.save(expired);
+  const write = io.write.getMockImplementation()!;
+  io.write.mockImplementationOnce(async value => { await write(value); now = 500000; });
+  await expect(manager.valid(15000)).rejects.toBeInstanceOf(SessionUnavailable);
+  expect(JSON.parse(stored()!).refreshToken).toBe('rotated');
+  expect(manager.snapshot()).toBeNull();
+});
+
+it('retains valid rotation even if the access token expires during the refresh response', async () => {
+  const { manager, io, stored } = setup(); await manager.save(expired);
+  io.refresh.mockResolvedValueOnce({ jwt: 'too-late', expiresAt: 999, refreshToken: 'fresh-rotation' });
+  await expect(manager.valid(0)).rejects.toBeInstanceOf(SessionUnavailable);
+  expect(JSON.parse(stored()!).refreshToken).toBe('fresh-rotation');
+  await manager.valid(0);
+  expect(io.refresh).toHaveBeenLastCalledWith('fresh-rotation');
+});
+
+it('copies save input before yielding so caller mutation cannot change the persisted identity', async () => {
+  const { manager, stored } = setup(); const input = { ...expired, expiresAt: 500000 };
+  const save = manager.save(input);
+  input.jwt = 'unrelated-account'; input.refreshToken = 'unrelated-refresh';
+  expect((await save).jwt).toBe('old');
+  expect(manager.snapshot()?.jwt).toBe('old');
+  expect(JSON.parse(stored()!).refreshToken).toBe('refresh');
+});
+
+it('each coalesced waiter receives a separate credential copy', async () => {
+  const { manager } = setup(); await manager.save(expired);
+  const [first, second] = await Promise.all([manager.valid(), manager.valid()]);
+  first!.jwt = 'changed-by-caller';
+  expect(second!.jwt).toBe('new'); expect(manager.snapshot()?.jwt).toBe('new');
+});
+
+it.each([-1, NaN, Infinity, 1.2, Number.MAX_SAFE_INTEGER + 1])('rejects invalid minimum %s before credential I/O', async threshold => {
+  const { manager, io } = setup();
+  await expect(manager.valid(threshold)).rejects.toThrow();
+  expect(io.read).not.toHaveBeenCalled(); expect(io.refresh).not.toHaveBeenCalled();
+});
+
+it('all coalesced waiters reject a late refresh after account replacement', async () => {
+  const { io, manager, stored } = setup(); await manager.save(expired);
+  let resolve!: (value: Session) => void;
+  io.refresh.mockReturnValueOnce(new Promise(done => { resolve = done; }));
+  const results = Promise.allSettled([manager.valid(15000), manager.valid(120000)]);
+  while (!io.refresh.mock.calls.length) await Promise.resolve();
+  await manager.save({ jwt: 'other-account', expiresAt: 500000, refreshToken: 'other-refresh' });
+  resolve({ jwt: 'late-old-account', expiresAt: 500000, refreshToken: 'old-rotation' });
+  for (const result of await results) expect(result).toMatchObject({ status: 'rejected', reason: new SessionExpired() });
+  expect(manager.snapshot()?.jwt).toBe('other-account');
+  expect(JSON.parse(stored()!).refreshToken).toBe('other-refresh');
 });
