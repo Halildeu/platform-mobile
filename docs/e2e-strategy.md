@@ -1,5 +1,39 @@
 # platform-mobile E2E strategy — Faz 24 M6
 
+## 2026-09-20 preflight transport evidence gap
+
+[Run35511722027](https://github.com/Halildeu/platform-mobile/actions/runs/35511722027)
+built the APK and passed transcript-demo, but app-launch stopped before APK
+installation. Core readiness and two launcher samples passed; logcat then exited
+255 and subsequent device commands exited1. The partial log was61,440bytes, below
+the512KiB cap. No app assertion or verified ANR occurred. Existing evidence cannot
+distinguish emulator process death, guest adbd loss or host ADB server restart;
+guest memory-pressure messages alone do not establish an out-of-memory kill.
+
+The previous observer started only after install. Moreover, synchronous health,
+snapshot and install commands blocked its event loop. All observed commands now
+use bounded asynchronous processes, and the observer starts before preflight.
+Startup requires a target-device frame and valid nonempty host ADB/emulator PID
+samples within5seconds. The emulator PID query is scoped to the executable and
+port5554 used by the isolated runner. PID rounds do not overlap. Observations
+include command start/duration, classified stderr failures, PID probe duration,
+sample counts and maximum sample gap. Gaps above2.5seconds make the observation
+incomplete. Even complete sampling does not exclude outages shorter than its
+actual sampling interval; adb frames and process samples remain separate evidence.
+
+The observer is stopped in a finally path on preflight, installation, Maestro or
+collector failure. Skipped installation is explicitly marked instead of producing
+an after-install label. Existing nonzero results remain failures; a zero process
+exit accompanied by a timeout/buffer error cannot pass. Raw stderr is never saved;
+the opt-in disposable-emulator system log boundary and512KiB cap are unchanged.
+
+Regression fixtures hold a logcat/installation command while independently changing
+transport and process IDs, and require observations timestamped inside that command.
+This repairs missing diagnostic coverage, not the still-unknown CI transport cause.
+Do not add test retries, drop readiness checks or claim physical/iOS acceptance.
+If fuller evidence establishes instability inherent to the shared runner, consider
+a fixed dedicated Android test runner rather than accumulating application patches.
+
 ## 2026-09-20 Android UI readiness race
 
 Run 35498487486 on source f220fea built successfully and passed transcript-demo
