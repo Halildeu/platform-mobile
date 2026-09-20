@@ -15,6 +15,7 @@ jobs:
     env:
       CI: '1'
       EXPO_NO_TELEMETRY: '1'
+      DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,13 +26,28 @@ jobs:
       - name: Check iOS source integration
         run: node --test scripts/ios-pcm-plugin.test.cjs
       - name: Record toolchain
+        shell: bash
         run: |
-          xcodebuild -version
-          xcrun --sdk iphonesimulator --show-sdk-version
-          pod --version
+          set -euo pipefail
+          mkdir -p artifacts/ios
+          test -d "$DEVELOPER_DIR"
+          xcodebuild -version | tee artifacts/ios/xcode-version.txt
+          grep -Fx 'Xcode 26.2' artifacts/ios/xcode-version.txt
+          xcrun swift --version | tee artifacts/ios/swift-version.txt
+          xcrun --sdk iphonesimulator --show-sdk-version | tee artifacts/ios/sdk-version.txt
+          pod --version | tee artifacts/ios/pod-version.txt
+          node <<'NODE'
+          const fs = require('node:fs');
+          const manifest = fs.readFileSync('node_modules/expo-modules-jsi/apple/Package.swift', 'utf8');
+          const minimum = manifest.match(/swift-tools-version:\s*(\d+)\.(\d+)/);
+          const installed = fs.readFileSync('artifacts/ios/swift-version.txt', 'utf8').match(/Swift version (\d+)\.(\d+)/);
+          if (!minimum || !installed) throw new Error('Could not verify Swift tools version');
+          const version = match => Number(match[1]) * 1000 + Number(match[2]);
+          if (version(installed) < version(minimum)) throw new Error('Swift compiler is older than the installed ExpoModulesJSI requirement');
+          NODE
       - name: Generate native iOS project
         run: npx expo prebuild --platform ios --no-install
-      - name: Install locked project pods
+      - name: Install project pods
         working-directory: ios
         run: pod install
       - name: Compile simulator package without signing

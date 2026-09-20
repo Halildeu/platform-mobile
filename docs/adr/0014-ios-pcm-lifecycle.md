@@ -66,6 +66,16 @@ case. These do not execute AVAudioEngine. The separate macOS workflow prebuilds,
 installs pods and compiles a Release simulator app without signing or submission.
 An unsigned simulator build is not iPhone installation or background acceptance.
 
+The first Mac run [35517561654](https://github.com/Halildeu/platform-mobile/actions/runs/35517561654)
+stopped in ExpoModulesJSI before AudioStream compilation: installed Package.swift
+requires Swift tools 6.2, while the runner's default Xcode 16.4 provides Swift 6.1.
+The workflow selects Xcode 26.2 explicitly for all steps and checks its compiler
+against that installed package requirement before pods/build. Xcode, Swift, SDK
+and CocoaPods versions are saved with the build evidence. The exact runner image
+[lists Xcode 26.2](https://github.com/actions/runner-images/blob/macos-15-arm64/20260907.0337/images/macos/macos-15-arm64-Readme.md);
+[Apple documents Swift 6.2.3 in that release](https://developer.apple.com/documentation/xcode-release-notes/xcode-26_2-release-notes).
+No fallback to the runner default or dependency tools-version downgrade is used.
+
 Physical compatible iPhone and Android tests remain: explicit opt-in/out, >60s
 locked recording and long recording, call interruption, headset disconnect,
 media reset where reproducible, no auto-resume, fresh user start, microphone
