@@ -72,3 +72,27 @@ test('release workflow has fixed CLI, main-only execution, environment, channel 
     assert.ok(unit.on.pull_request.paths.includes(path));
   assert.ok(unit.jobs.unit.steps.some(step => step.run?.includes('scripts/update-plan.test.mjs')));
 });
+
+test('build and submit workflows separate mutation, preserve receipts and expose only explicit targets', () => {
+  for (const operation of ['build', 'submit']) {
+    const workflow = YAML.parse(readFileSync(`.github/workflows/mobile-${operation}.yml`, 'utf8'));
+    const job = workflow.jobs[operation];
+    assert.equal(job.if, "github.ref == 'refs/heads/main'");
+    assert.equal(job.environment, operation === 'build' ? 'mobile-${{ inputs.channel }}' : 'mobile-production');
+    assert.equal(workflow.permissions.contents, 'read');
+    assert.equal(workflow.concurrency.group, `mobile-${operation}-\u0024{{ inputs.platform }}`);
+    assert.equal(workflow.concurrency['cancel-in-progress'], false);
+    assert.equal(workflow.on.workflow_dispatch.inputs.execute.default, false);
+    const commands = job.steps.filter(s => s.run).map(s => s.run).join('\n');
+    assert.ok(commands.includes(`npm install --global eas-cli@${EAS_VERSION}`));
+    assert.ok(commands.includes('node scripts/package-execute.mjs --intent'));
+    assert.ok(!commands.includes('${{ inputs.') && !commands.includes('--latest') && !commands.includes('--auto-submit'));
+    assert.ok(job.steps.some(s => s.if === 'always()' && s.with?.path?.startsWith('release-evidence/')));
+    assert.equal(job.env.PACKAGE_OPERATION, operation);
+    if (operation === 'submit') {
+      assert.equal(job.env.PACKAGE_BUILD_ID, '${{ inputs.build_id }}');
+      assert.equal(job.env.PACKAGE_ARCHIVE_SHA256, '${{ inputs.archive_sha256 }}');
+      assert.equal(job.env.PACKAGE_SUBMISSION_ID, '${{ inputs.existing_submission_id }}');
+    }
+  }
+});

@@ -1,0 +1,81 @@
+name: Mobile internal submission
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        type: choice
+        options: [android, ios]
+        required: true
+      ota:
+        description: 'The accepted build used ota-production'
+        type: boolean
+        default: false
+      build_id:
+        description: 'Exact FINISHED production STORE build UUID'
+        type: string
+        required: true
+      source_commit:
+        description: 'Original 40-character source SHA from the accepted build receipt'
+        type: string
+        required: true
+      archive_sha256:
+        description: 'SHA256 from the downloaded accepted archive'
+        type: string
+        required: true
+      existing_submission_id:
+        description: 'Optional exact submission UUID: read/verify only, never submit again'
+        type: string
+      execute:
+        description: 'Send one package to Play internal / App Store Connect; false verifies only'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: mobile-submit-${{ inputs.platform }}
+  cancel-in-progress: false
+jobs:
+  submit:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    environment: mobile-production
+    env:
+      PACKAGE_OPERATION: submit
+      PACKAGE_PLATFORM: ${{ inputs.platform }}
+      PACKAGE_CHANNEL: production
+      PACKAGE_OTA: ${{ inputs.ota }}
+      PACKAGE_BUILD_ID: ${{ inputs.build_id }}
+      PACKAGE_SOURCE_COMMIT: ${{ inputs.source_commit }}
+      PACKAGE_ARCHIVE_SHA256: ${{ inputs.archive_sha256 }}
+      PACKAGE_SUBMISSION_ID: ${{ inputs.existing_submission_id }}
+      MOBILE_ASC_APP_ID: ${{ vars.MOBILE_ASC_APP_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: node --test scripts/package-*.test.mjs scripts/release-config.test.mjs
+      - run: node scripts/package-execute.mjs --intent
+      - run: npm install --global eas-cli@24.7.0
+      - run: node scripts/package-cli-check.mjs
+      - name: Verify archive and submit once, or read the existing submission
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          APPLY_PACKAGE: ${{ inputs.execute }}
+        shell: bash
+        run: |
+          if [ "$APPLY_PACKAGE" = 'true' ]; then
+            node scripts/package-execute.mjs --execute
+          else
+            node scripts/package-execute.mjs
+          fi
+      - name: Preserve sanitized receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-submit-${{ inputs.platform }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-evidence/package.json
+          retention-days: 30

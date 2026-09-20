@@ -18,6 +18,9 @@ jobs:
       - run: npm run typecheck
       - run: node --test scripts/fcm-config.check.js
       - run: node --test scripts/update-plan.test.mjs scripts/update-remote.test.mjs scripts/release-config.test.mjs
+      - run: node --test scripts/package-*.test.mjs
+      - run: npm install --global eas-cli@24.7.0
+      - run: node scripts/package-cli-check.mjs
       - run: npm test -- --runInBand --coverage --watch=false
       - uses: actions/upload-artifact@v4
         if: always()
