@@ -655,8 +655,8 @@ test("zero exit with a command error or signal cannot become acceptance", () => 
 });
 
 test("real Linux pgrep matches observed runner executable/port and excludes other targets", async () => {
-  // Run35511722027 starts /usr/local/lib/android/sdk/emulator/emulator -port5554.
-  // Exercise Linux POSIX ERE against real argv0, including the qemu child form.
+  // The runner's -no-window launcher execs qemu-system-ARCH-headless.
+  // Exercise Linux POSIX ERE against real argv0, including both QEMU variants.
   for (const [argv0, port, match] of [
     ["/usr/local/lib/android/sdk/emulator/emulator", "5554", true],
     [
@@ -664,6 +664,17 @@ test("real Linux pgrep matches observed runner executable/port and excludes othe
       "5554",
       true,
     ],
+    [
+      "/usr/local/lib/android/sdk/emulator/qemu/linux-x86_64/qemu-system-x86_64-headless",
+      "5554",
+      true,
+    ],
+    ["/opt/android/qemu-system-aarch64", "5554", true],
+    ["/opt/android/qemu-system-aarch64-headless", "5554", true],
+    ["/opt/android/qemu-system-x86_64-headless", "5556", false],
+    ["/opt/android/qemu-system-aarch64-headless", "55540", false],
+    ["/opt/android/qemu-system-x86_64-headless-extra", "5554", false],
+    ["/opt/android/qemu-system-aarch64-headless-extra", "5554", false],
     ["/usr/local/lib/android/sdk/emulator/emulator", "5556", false],
     ["/tmp/other-emulator", "5554", false],
   ]) {
@@ -694,6 +705,7 @@ test("real Linux pgrep matches observed runner executable/port and excludes othe
       assert.equal(
         result.stdout.trim().split(/\s+/).includes(String(child.pid)),
         match,
+        `${argv0} -port ${port}`,
       );
     } finally {
       child.kill("SIGKILL");

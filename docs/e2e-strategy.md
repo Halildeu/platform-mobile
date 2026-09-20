@@ -1,5 +1,27 @@
 # platform-mobile E2E strategy — Faz 24 M6
 
+## 2026-09-20 headless emulator detection regression
+
+[Run35514381900](https://github.com/Halildeu/platform-mobile/actions/runs/35514381900)
+built and verified its APK, but both flows stopped before installation. All
+pre/postflight device health probes passed and transport stayed `device`; the
+new host-emulator PID check returned an empty list throughout. The process-name
+pattern excluded `qemu-system-x86_64-headless`, so startupReady was false.
+This is a source regression in the new observer, not evidence of emulator death.
+
+The runner passes `-no-window`. Android's
+[launcher source](https://android.googlesource.com/platform/external/qemu/+/refs/heads/emu-35-3-release/android/emulator/main-emulator.cpp)
+selects `qemu-system-ARCH-headless` for that option and execs it. The detector
+now accepts the optional `-headless` suffix for x86_64/aarch64 QEMU executables,
+retaining the executable-name and exact port5554 boundaries. Real Linux pgrep
+fixtures cover both architectures, headless/non-headless names, wrong ports,
+and misleading `-headless-extra` suffixes. The new fixture failed against the
+previous pattern before the fix. The earlier fixture missed the headless form.
+
+Readiness, observation completeness and Maestro assertions are unchanged. No
+failure retry is added. New native CI is still required; this fix does not prove
+the earlier intermittent transport failure repaired or physical/iOS acceptance.
+
 ## 2026-09-20 preflight transport evidence gap
 
 [Run35511722027](https://github.com/Halildeu/platform-mobile/actions/runs/35511722027)
