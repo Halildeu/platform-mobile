@@ -5,7 +5,7 @@ import { requestFailure } from './requestFailure';
 import { mobileSession } from '../auth/mobileSession';
 import { SessionExpired } from '../auth/sessionManager';
 import { parsePersistedResult } from '../analysis/persistedResult';
-import { parseSavedTranscript } from '../analysis/savedTranscript';
+import { parseSavedTranscript, type SavedTranscriptDocument } from '../analysis/savedTranscript';
 import { disableNativePush } from '../notifications/nativePush';
 import { resultExporter } from '../analysis/nativeResultExport';
 import { bufferJournal } from './nativeBufferJournal';
@@ -214,7 +214,7 @@ async function request(path: string, jwt: string, body?: object, key?: string, m
 }
 
 export interface Meeting { id: string; title: string }
-export async function savedTranscript(meetingId: string, analysisRunId: string): Promise<string> {
+export async function savedTranscript(meetingId: string, analysisRunId: string): Promise<SavedTranscriptDocument> {
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (!uuid.test(meetingId) || !uuid.test(analysisRunId)) throw new Error('Geçersiz toplantı sonucu.');
   const session = await validSession(30000);

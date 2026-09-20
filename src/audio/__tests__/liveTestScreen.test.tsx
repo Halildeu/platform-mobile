@@ -224,7 +224,7 @@ it('restores canonical full text in Metin even when a partial navigation cache e
   saveMeetingView('meeting-1', { lines: [{ seq: 1, text: 'PARTIAL_CACHE', confirmed: 'PARTIAL_CACHE', tentative: '', status: 'final' }], analysis: null, diagnostics: [] });
   jest.mocked(api.restoreSession).mockResolvedValue({ jwt: 'test-only', expiresAt: Date.now() + 600000 });
   jest.mocked(api.persistedResult).mockResolvedValue({ analysisRunId: 'run-1', meetingId: 'meeting-1', sessionId: 'session-1', generatedAt: '2026-09-18T10:00:00Z', summary: '', decisions: [], actions: [], sources: [] });
-  jest.mocked(api.savedTranscript).mockResolvedValue('FULL_SAVED_TRANSCRIPT');
+  jest.mocked(api.savedTranscript).mockResolvedValue({ meetingId: 'meeting-1', analysisRunId: 'run-1', text: 'FULL_SAVED_TRANSCRIPT' });
   const screen = render(<LiveTestScreen />);
   await waitFor(() => expect(screen.getByText('Test toplantısı')).toBeTruthy());
   fireEvent.press(screen.getByText('Test toplantısı'));
