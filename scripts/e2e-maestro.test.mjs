@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   mkdtempSync,
   mkdirSync,
@@ -14,6 +14,12 @@ import { join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import { test } from "node:test";
 import { waitForEmulatorWindow } from "./e2e-maestro-emulator.mjs";
+import {
+  commandExitCode,
+  commandOutcome,
+  runCommand,
+} from "./e2e-maestro-command.mjs";
+import { emulatorProcessPattern } from "./e2e-maestro-transport.mjs";
 
 const script = fileURLToPath(new URL("./e2e-maestro.mjs", import.meta.url));
 function fixture(t) {
@@ -34,10 +40,27 @@ if (args.includes('track-devices')) {
   if (process.env.TRANSIENT) setTimeout(() => {
     process.stdout.write(frame('emulator-5554\\toffline\\n') + frame('') + frame('emulator-5554\\tdevice\\n'));
   }, 30);
+  const fs = require('node:fs');
+  fs.writeFileSync('tracker-pid', String(process.pid));
+  process.on('SIGTERM', () => { fs.writeFileSync('tracker-stopped', '1'); process.exit(0); });
+  let lossSent = false;
+  setInterval(() => {
+    if (fs.existsSync('held-command') && !lossSent) {
+      lossSent = true;
+      process.stdout.write(frame('emulator-5554\\toffline\\n') + frame(''));
+    }
+  }, 20);
   setInterval(() => {}, 1000);
 }
 if (args.includes('disable-user')) { require('node:fs').writeFileSync('disabled.json', JSON.stringify(args)); process.exit(Number(process.env.DISABLE_EXIT || 0)); }
-if (args.includes('install')) { require('node:fs').writeFileSync('installed.json', JSON.stringify(args)); process.exit(Number(process.env.INSTALL_EXIT || 0)); }
+if (args.includes('install')) {
+  const fs = require('node:fs');
+  fs.writeFileSync('installed.json', JSON.stringify(args));
+  if (process.env.HOLD_INSTALL) {
+    fs.writeFileSync('held-command', 'install');
+    setTimeout(() => process.exit(Number(process.env.INSTALL_EXIT || 7)), 1600);
+  } else process.exit(Number(process.env.INSTALL_EXIT || 0));
+}
 if (args.includes('get-state')) {
   const fs = require('node:fs');
   const ready = fs.existsSync('window-count') && Number(fs.readFileSync('window-count', 'utf8')) >= 2;
@@ -59,7 +82,12 @@ if (args.includes('displays')) {
   console.log('mCurrentFocus=Window{123 u0 ' + (error ? 'Application Not Responding: com.android.launcher3' : 'com.android.launcher3/.Launcher') + '}');
 }
 if (args.includes('lastanr')) console.log('SYNTHETIC_ANR_TRACE');
-if (args.includes('logcat')) console.log(process.env.LOG_OVERSIZE ? 'x'.repeat(2 * 1024 * 1024) : 'SYNTHETIC_BOOT_LOG');
+if (args.includes('logcat')) {
+  if (process.env.PREFLIGHT_LOSS) {
+    require('node:fs').writeFileSync('held-command', 'logcat');
+    setTimeout(() => { console.error('error: device offline PRIVATE_ERROR_MARKER'); process.exit(255); }, 1600);
+  } else console.log(process.env.LOG_OVERSIZE ? 'x'.repeat(2 * 1024 * 1024) : 'SYNTHETIC_BOOT_LOG');
+}
 `,
     { mode: 0o755 },
   );
@@ -77,7 +105,16 @@ setTimeout(() => {
   );
   writeFileSync(
     join(bin, "pgrep"),
-    `#!${process.execPath}\nconsole.log(process.env.PID_RAW || (require('node:fs').existsSync('pid-changed') ? '23456' : '12345'));\n`,
+    `#!${process.execPath}
+const fs = require('node:fs');
+const emulator = process.argv.at(-1).includes('qemu-system');
+if (process.env.NO_EMULATOR && emulator) process.exit(1);
+if (fs.existsSync('held-command')) {
+  if (process.env.EMULATOR_DIES && emulator) process.exit(1);
+  if (process.env.ADB_RESTARTS && !emulator) { console.log('45678'); process.exit(0); }
+}
+console.log(process.env.PID_RAW || (fs.existsSync('pid-changed') ? '23456' : '12345'));
+`,
     { mode: 0o755 },
   );
   return { cwd, bin };
@@ -127,6 +164,8 @@ test("install failure keeps evidence and never invokes Maestro", (t) => {
   assert.equal(run(f, { INSTALL_EXIT: "7" }).status, 7);
   assert.equal(evidence(f).exitCode, 7);
   assert.ok(!existsSync(join(f.cwd, "invoked.json")));
+  assert.equal(evidence(f).transport.complete, true);
+  assert.equal(evidence(f).transport.tracker.stoppedByRunner, true);
 });
 
 test("isolated flows select exactly one scenario and preserve failures", (t) => {
@@ -470,4 +509,195 @@ test("oversized system log is bounded and cannot produce healthy acceptance", (t
       512 * 1024,
   );
   assert.equal(existsSync(join(f.cwd, "invoked.json")), false);
+});
+
+test("preflight loss retains concurrent transport and independent emulator/server evidence", (t) => {
+  for (const mode of ["EMULATOR_DIES", "ADB_RESTARTS"]) {
+    const f = fixture(t);
+    assert.equal(
+      run(f, { ...synthetic, PREFLIGHT_LOSS: "1", [mode]: "1" }).status,
+      1,
+    );
+    const data = evidence(f);
+    const log = data.emulator[0].probes.find((p) => p.name === "system-log");
+    assert.equal(log.exitCode, 255);
+    assert.equal(log.failure, "device-offline");
+    assert.ok(log.elapsedMs >= 1500);
+    const start = Date.parse(log.at);
+    const end = start + log.elapsedMs;
+    const during = data.transport.events.filter(
+      (e) => Date.parse(e.at) >= start && Date.parse(e.at) < end,
+    );
+    assert.ok(
+      during.some((e) => e.kind === "transport" && e.state === "offline"),
+    );
+    if (mode === "EMULATOR_DIES") {
+      assert.ok(
+        during.some(
+          (e) => e.kind === "host-emulator" && e.valid && e.pids.length === 0,
+        ),
+      );
+      assert.ok(
+        data.transport.events
+          .filter((e) => e.kind === "host-adb-server")
+          .every((e) => e.pids[0] === 12345),
+      );
+    } else {
+      assert.ok(
+        during.some((e) => e.kind === "host-adb-server" && e.pids[0] === 45678),
+      );
+      assert.ok(
+        data.transport.events
+          .filter((e) => e.kind === "host-emulator")
+          .every((e) => e.pids[0] === 12345),
+      );
+    }
+    assert.equal(data.transport.complete, true);
+    assert.ok(data.transport.pidSampleRounds >= 3);
+    assert.ok(!JSON.stringify(data).includes("PRIVATE_ERROR_MARKER"));
+    assert.equal(
+      data.steps.some((s) => s.phase === "after-install"),
+      false,
+    );
+    assert.equal(data.steps.find((s) => s.phase === "install").skipped, true);
+    assert.equal(existsSync(join(f.cwd, "installed.json")), false);
+    assert.equal(existsSync(join(f.cwd, "invoked.json")), false);
+    assert.equal(existsSync(join(f.cwd, "tracker-stopped")), true);
+  }
+});
+
+test("installation remains observed and its failure is preserved", (t) => {
+  const f = fixture(t);
+  assert.equal(
+    run(f, { HOLD_INSTALL: "1", INSTALL_EXIT: "7", ADB_RESTARTS: "1" }).status,
+    7,
+  );
+  const data = evidence(f);
+  const install = data.steps.find((s) => s.phase === "install");
+  const during = data.transport.events.filter(
+    (e) =>
+      Date.parse(e.at) >= Date.parse(install.at) &&
+      Date.parse(e.at) < Date.parse(install.at) + install.elapsedMs,
+  );
+  assert.ok(
+    during.some((e) => e.kind === "transport" && e.state === "offline"),
+  );
+  assert.ok(
+    during.some((e) => e.kind === "host-adb-server" && e.pids[0] === 45678),
+  );
+  assert.equal(data.transport.complete, true);
+  assert.equal(existsSync(join(f.cwd, "invoked.json")), false);
+  assert.equal(existsSync(join(f.cwd, "tracker-stopped")), true);
+});
+
+test("missing target emulator PID prevents install even if adb reports a device", (t) => {
+  const f = fixture(t);
+  assert.equal(run(f, { NO_EMULATOR: "1" }).status, 1);
+  assert.equal(evidence(f).transport.startupReady, false);
+  assert.equal(evidence(f).transport.complete, false);
+  assert.equal(existsSync(join(f.cwd, "installed.json")), false);
+  assert.equal(existsSync(join(f.cwd, "tracker-stopped")), true);
+});
+
+test("collector file error still closes tracker and fails instead of losing all evidence", (t) => {
+  const f = fixture(t);
+  const dir = join(f.cwd, "artifacts/maestro");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "emulator-before-install-windows.txt"),
+    "prior evidence",
+  );
+  assert.equal(run(f, synthetic).status, 1);
+  assert.equal(evidence(f).runnerError, "runner-or-evidence-collection-failed");
+  assert.equal(existsSync(join(f.cwd, "tracker-stopped")), true);
+  assert.equal(existsSync(join(f.cwd, "installed.json")), false);
+  assert.equal(
+    readFileSync(join(dir, "emulator-before-install-windows.txt"), "utf8"),
+    "prior evidence",
+  );
+});
+
+test("async command deadlines and bounded stderr preserve safe failure metadata", async () => {
+  const deadline = await runCommand(
+    process.execPath,
+    ["-e", "setInterval(() => {}, 1000)"],
+    { timeout: 100 },
+  );
+  assert.equal(commandOutcome(deadline).failure, "ETIMEDOUT");
+  const overflow = await runCommand(
+    process.execPath,
+    ["-e", "console.error('PRIVATE'.repeat(2000))"],
+    { maxBuffer: 512 },
+  );
+  assert.equal(commandOutcome(overflow).failure, "ENOBUFS");
+  assert.ok(Buffer.byteLength(overflow.stderr) <= 512);
+  for (const [message, category] of [
+    ["error: device 'PRIVATE_SERIAL' not found", "device-not-found"],
+    ["protocol fault (couldn't read status): PRIVATE", "server-disconnected"],
+    ["device unauthorized: PRIVATE", "device-unauthorized"],
+    ["unknown PRIVATE", "command-failed"],
+  ]) {
+    const data = commandOutcome({ status: 1, stderr: message });
+    assert.equal(data.failure, category);
+    assert.ok(!JSON.stringify(data).includes("PRIVATE"));
+  }
+});
+
+test("zero exit with a command error or signal cannot become acceptance", () => {
+  assert.equal(commandExitCode({ status: 0 }), 0);
+  for (const error of ["ETIMEDOUT", "ENOBUFS", "ENOENT"]) {
+    assert.equal(commandExitCode({ status: 0, error: { code: error } }), 1);
+    assert.equal(commandExitCode({ status: 7, error: { code: error } }), 7);
+  }
+  assert.equal(commandExitCode({ status: 0, signal: "SIGTERM" }), 1);
+  assert.equal(commandExitCode({ status: null }), 1);
+  assert.equal(commandExitCode({ status: -2, error: { code: "ENOENT" } }), 1);
+});
+
+test("real Linux pgrep matches observed runner executable/port and excludes other targets", async () => {
+  // Run35511722027 starts /usr/local/lib/android/sdk/emulator/emulator -port5554.
+  // Exercise Linux POSIX ERE against real argv0, including the qemu child form.
+  for (const [argv0, port, match] of [
+    ["/usr/local/lib/android/sdk/emulator/emulator", "5554", true],
+    [
+      "/usr/local/lib/android/sdk/emulator/qemu/linux-x86_64/qemu-system-x86_64",
+      "5554",
+      true,
+    ],
+    ["/usr/local/lib/android/sdk/emulator/emulator", "5556", false],
+    ["/tmp/other-emulator", "5554", false],
+  ]) {
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        "setInterval(() => {}, 1000)",
+        "--",
+        "-port",
+        port,
+        "-avd",
+        "test",
+      ],
+      { argv0, stdio: "ignore" },
+    );
+    const closed = new Promise((resolve) => child.on("close", resolve));
+    try {
+      await new Promise((resolve, reject) => {
+        child.once("spawn", resolve);
+        child.once("error", reject);
+      });
+      const result = await runCommand("/usr/bin/pgrep", [
+        "-f",
+        emulatorProcessPattern,
+      ]);
+      assert.ok([0, 1].includes(result.status));
+      assert.equal(
+        result.stdout.trim().split(/\s+/).includes(String(child.pid)),
+        match,
+      );
+    } finally {
+      child.kill("SIGKILL");
+      await closed;
+    }
+  }
 });

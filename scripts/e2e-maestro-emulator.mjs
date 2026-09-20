@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
-import { spawnSync } from "node:child_process";
 import { mkdirSync, statfsSync, writeFileSync } from "node:fs";
 import { cpus, freemem, loadavg, totalmem } from "node:os";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
+import { commandOutcome, runCommand } from "./e2e-maestro-command.mjs";
 
 function windowState(windows) {
   if (windows === null) return "probe-failed";
@@ -42,7 +42,7 @@ export async function waitForEmulatorWindow(
   let reason = "startup-timeout";
   let ready = false;
   while (now() < deadline) {
-    windows = readWindow(
+    windows = await readWindow(
       Math.max(1, Math.ceil(Math.min(5000, deadline - now()))),
       checks.length,
     );
@@ -91,20 +91,16 @@ export async function collectEmulatorHealth(
     healthy: false,
     probes: [],
   };
-  function probe(name, args, save = false, timeout = 5000) {
-    const command = spawnSync("adb", ["-s", "emulator-5554", ...args], {
-      encoding: "utf8",
+  async function probe(name, args, save = false, timeout = 5000) {
+    const command = await runCommand("adb", ["-s", "emulator-5554", ...args], {
       timeout,
       maxBuffer: 512 * 1024,
-      killSignal: "SIGKILL",
     });
     const ok = command.status === 0 && !command.error;
     result.probes.push({
       name,
       ok,
-      exitCode: command.status,
-      error: command.error?.code ?? null,
-      signal: command.signal,
+      ...commandOutcome(command),
       truncated: command.error?.code === "ENOBUFS",
     });
     if (save)
@@ -117,7 +113,11 @@ export async function collectEmulatorHealth(
   }
   // Check the selected transport before persisting any device output.
   if (
-    probe("emulator-identity", ["shell", "getprop", "ro.kernel.qemu"]) !== "1"
+    (await probe("emulator-identity", [
+      "shell",
+      "getprop",
+      "ro.kernel.qemu",
+    ])) !== "1"
   ) {
     result.reason = "Expected disposable emulator is unavailable";
     return result;
@@ -131,9 +131,14 @@ export async function collectEmulatorHealth(
     loadAverage: loadavg(),
     freeDiskBytes: disk.bavail * disk.bsize,
   };
-  const state = probe("transport", ["get-state"]);
-  const boot = probe("boot", ["shell", "getprop", "sys.boot_completed"]);
-  const packages = probe("package-manager", ["shell", "pm", "path", "android"]);
+  const state = await probe("transport", ["get-state"]);
+  const boot = await probe("boot", ["shell", "getprop", "sys.boot_completed"]);
+  const packages = await probe("package-manager", [
+    "shell",
+    "pm",
+    "path",
+    "android",
+  ]);
   let coreReady =
     state === "device" &&
     boot === "1" &&
@@ -157,13 +162,13 @@ export async function collectEmulatorHealth(
     );
   // Do not install against core-service observations made before a startup wait.
   if (phase === "before-install" && coreReady && readiness.ready) {
-    const currentState = probe("transport-ready", ["get-state"]);
-    const currentBoot = probe("boot-ready", [
+    const currentState = await probe("transport-ready", ["get-state"]);
+    const currentBoot = await probe("boot-ready", [
       "shell",
       "getprop",
       "sys.boot_completed",
     ]);
-    const currentPackages = probe("package-manager-ready", [
+    const currentPackages = await probe("package-manager-ready", [
       "shell",
       "pm",
       "path",
@@ -178,7 +183,7 @@ export async function collectEmulatorHealth(
   result.ready = coreReady && readiness.ready;
   result.errorDialog = readiness.reason === "error-dialog";
   // Capture before Maestro can clear logcat; lastanr survives log ring rotation.
-  probe(
+  await probe(
     "system-log",
     [
       "logcat",
@@ -194,8 +199,8 @@ export async function collectEmulatorHealth(
     ],
     true,
   );
-  probe("last-anr", ["shell", "dumpsys", "activity", "lastanr"], true);
-  probe("guest-memory", ["shell", "cat", "/proc/meminfo"], true);
+  await probe("last-anr", ["shell", "dumpsys", "activity", "lastanr"], true);
+  await probe("guest-memory", ["shell", "cat", "/proc/meminfo"], true);
   result.healthy =
     result.ready && !result.errorDialog && result.probes.every((p) => p.ok);
   return result;
