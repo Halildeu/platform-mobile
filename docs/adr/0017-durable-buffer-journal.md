@@ -1,0 +1,66 @@
+# ADR 0017 — Durable audio discovery and loss-aware cleanup
+
+Status: source preparation for #7. Retention remains unset/off. Cold replay,
+explicit recovery/abandon UI and native Android/iOS acceptance remain required
+before activation. This ADR supplements 0001 and the KVKK boundary ADR-0030.
+
+## Failure and decision
+
+An encrypted per-session database alone is not a recovery mechanism: after
+process death there was no discoverable list, expired empty queues forgot loss,
+and lifecycle retry could finish the gateway session before pending PCM replay.
+
+Use one encrypted SecureStore metadata journal (max four entries, max 2048 UTF-8
+bytes). No PCM, transcript or token appears in it. Identity is the SHA-256 of
+the existing account/tenant owner hash plus gateway session ID. Every record
+and identity is validated before deriving a file/key name. Unknown, locked,
+corrupt or full journals fail closed; entries are never silently evicted.
+
+The journal writes `creating` before any key or database creation, verifies the
+write, then writes `ready` after SQLCipher and the database have been verified.
+A failed/ambiguous write remains discoverable. Unexpected existing files are
+not overwritten. Recovery/cleanup only opens an existing file with its original
+key, never creates a replacement empty database.
+
+Within one app runtime, a lease spans registration, opening, capture, successful
+close and destruction. Sweep skips active leases. A failed native close retains
+the lease and retries that exact handle; no parallel open is permitted. This is
+not a cross-process SQLite locking protocol; app extensions/multiple runtimes
+must not share these files.
+
+TTL/capacity removal and cumulative loss counters commit in one SQLite
+transaction. Gateway ACK deletion does not increment loss. Counters survive
+reopening. Loss cleanup removes audio/key but retains a `lost` tombstone;
+`deleting` preserves whether cleanup follows loss or validated drain. Metadata
+survives failed close, key deletion, file deletion or verification writes.
+
+An empty queue alone never permits success cleanup. Only validated transport
+`drained` plus no pending/lost chunks can seal the buffer and persist `drained`.
+The queue checks, seal and journal transition run under the same lease and
+serialized mutation. Canonical HTTP finish refuses unfinished/lost metadata,
+including its retry path when starting another recording. Gateway ACK/drained
+still do not prove final transcript/analysis persistence.
+
+## Cleanup execution and alternatives
+
+Closed-buffer expiry runs at app-root mount, foreground and a one-minute
+timer while the app is active. It uses the ORIGINAL configured retention;
+restart does not extend deadlines. Active handles retain their expiry timer.
+Cold replay is not implemented by this delta.
+
+Android/iOS cannot guarantee JavaScript execution at a retention deadline while
+the user/OS has killed the process. This design performs physical cleanup on
+the next execution, not an exact-deadline background deletion guarantee. If the
+approved requirement demands no disk persistence beyond such a deadline, the
+existing memory-only mode is the appropriate alternative. Do not enable durable
+storage by merely choosing a duration. Retention policy remains an operator
+decision deferred by the user.
+
+## Verification and outstanding acceptance
+
+Tests use actual SQLite for rollback, reopened loss counters and persistent-file
+cleanup, with injected native boundaries. A synthetic cipher capability in
+those tests does not validate SQLCipher. Native keychain/keystore protection,
+encrypted on-disk bytes, OS interruptions, long recordings and physical expiry
+still require an Android/iOS package and device tests. No raw retention setting
+or existing server/tenant state is changed.

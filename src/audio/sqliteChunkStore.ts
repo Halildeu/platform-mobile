@@ -2,7 +2,8 @@
  * SQLite-backed ChunkStore (PR-mobile-05, #7) — on-device persistence.
  *
  * Concrete `ChunkStore` for the phone: survives app kill / crash so buffered
- * audio replays after a cold restart, not just an in-process reconnect. The
+ * audio can be discovered after a cold restart. Recovery UI/transport is a
+ * separate integration; persistence alone does not prove replay. The
  * queue/TTL/eviction POLICY lives in `OfflineAudioBuffer` (unit-tested); this
  * file is only the storage mapping.
  *
@@ -56,6 +57,32 @@ export class SqliteChunkStore implements ChunkStore {
          pcm16          BLOB    NOT NULL
        )`,
     );
+    this.db.execSync(`CREATE TABLE IF NOT EXISTS audio_buffer_loss (
+      id INTEGER PRIMARY KEY CHECK (id = 1), expired INTEGER NOT NULL, evicted INTEGER NOT NULL);
+      INSERT OR IGNORE INTO audio_buffer_loss (id, expired, evicted) VALUES (1, 0, 0);`);
+  }
+
+  losses(): { expired: number; evicted: number } {
+    const row = this.db.getFirstSync<{ expired: number; evicted: number }>('SELECT expired, evicted FROM audio_buffer_loss WHERE id = 1');
+    if (!row || !Number.isSafeInteger(row.expired) || row.expired < 0 || !Number.isSafeInteger(row.evicted) || row.evicted < 0) {
+      throw new Error('Ses kaybı kaydı okunamadı.');
+    }
+    return row;
+  }
+
+  discard(chunkSeq: number, reason: 'expired' | 'evicted'): void {
+    if (!['expired', 'evicted'].includes(reason)) throw new Error('Geçersiz silme nedeni.');
+    this.db.execSync('BEGIN IMMEDIATE');
+    try {
+      // Count only an existing row; repeated cleanup cannot double-count a loss.
+      this.db.runSync(`UPDATE audio_buffer_loss SET ${reason} = ${reason} +
+        (SELECT COUNT(*) FROM ${TABLE} WHERE chunk_seq = ?) WHERE id = 1`, [chunkSeq]);
+      this.remove(chunkSeq);
+      this.db.execSync('COMMIT');
+    } catch (error) {
+      try { this.db.execSync('ROLLBACK'); } catch { /* caller treats storage as failed */ }
+      throw error;
+    }
   }
 
   put(chunk: StoredChunk): void {

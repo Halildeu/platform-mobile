@@ -3,7 +3,8 @@ import { OfflineAudioBuffer } from '../offlineBuffer';
 
 function fixture(retentionMs: unknown = 60000) {
   const buffer = new OfflineAudioBuffer();
-  const handle = { buffer, close: jest.fn(), destroy: jest.fn(async () => {}) };
+  const handle = { buffer, close: jest.fn(), destroy: jest.fn(async () => {}),
+    confirmDrained: jest.fn(async () => {}), markLost: jest.fn(async () => {}) };
   const open = jest.fn(async () => handle);
   const options = { retentionMs, sessionId: 'SES-test', ownerScope: jest.fn(async () => 'owner-hash'), onStorageError: jest.fn() };
   return { buffer, handle, open, options };
@@ -34,6 +35,7 @@ test('sent but unacknowledged audio is retained on release', async () => {
 });
 test('empty buffer cleanup failure can be retried', async () => {
   const f = fixture(); const result = await createRecordingBuffer(f.options, f.open);
+  await result.confirmDrained();
   f.handle.destroy.mockRejectedValueOnce(new Error('busy'));
   await expect(result.release()).rejects.toThrow('busy');
   expect(await result.release()).toBe('removed');

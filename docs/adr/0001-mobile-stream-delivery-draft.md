@@ -2,6 +2,12 @@
 
 Durum: Yerel PoC; kabul edilmiş mimari karar değildir. 2026-09-08.
 
+20 Eylül güncellemesi: aşağıdaki eski kapanış/keşif açıklamalarının güncel
+kararı [ADR0017](0017-durable-buffer-journal.md) içindedir. Kuyruğun boş olması
+başarılı silme için yeterli değildir; doğrulanmış drained veya kayıp kaydı gerekir.
+Keşif dizini ve kapalı depo temizliği kaynakta eklendi. Cold replay, açık kullanıcı
+kurtarma/vazgeçme akışı ve fiziksel cihaz kabulü hâlâ açıktır; kalıcı saklama kapalıdır.
+
 ## Karar sınırı
 
 Mevcut ön plan ses akışı korunur. WS gönderim başarısı kalıcı teslim sayılmaz.

@@ -8,6 +8,7 @@ import { parsePersistedResult } from '../analysis/persistedResult';
 import { parseSavedTranscript } from '../analysis/savedTranscript';
 import { disableNativePush } from '../notifications/nativePush';
 import { resultExporter } from '../analysis/nativeResultExport';
+import { bufferJournal } from './nativeBufferJournal';
 
 export const BASE_URL = 'https://testai.acik.com';
 const ISSUER = `${BASE_URL}/realms/platform-test`;
@@ -76,6 +77,7 @@ async function syncLifecycle(jwt: string, pending: PendingLifecycle): Promise<vo
   }
 }
 async function finishPending(jwt: string, pending: PendingLifecycle): Promise<void> {
+  await bufferJournal.assertFinishAllowed(pending.ownerHash, pending.externalSessionId);
   if (pending.endedAt === null) {
     const finishedAtMs = await finishGateway(jwt, pending.externalSessionId);
     if (finishedAtMs < Date.parse(pending.startedAt) || finishedAtMs > 8640000000000000) {
