@@ -4,18 +4,20 @@ import { persistedResult, savedTranscript } from '../audio/liveTestApi';
 import { mobileSession } from '../auth/mobileSession';
 import { useResultExport } from './useResultExport';
 import { transcriptHtml } from './exportHtml';
+import { savedTranscriptRows, type SavedTranscriptDocument } from './savedTranscript';
 
 async function loadTranscript(meetingId: string) {
   const result = await persistedResult(meetingId);
   return savedTranscript(meetingId, result.analysisRunId);
 }
 
-type Props = { meetingId: string; load?: (meetingId: string) => Promise<string> };
+type Props = { meetingId: string; load?: (meetingId: string) => Promise<SavedTranscriptDocument> };
 export function SavedTranscript(props: Props) {
   return <TranscriptForMeeting key={props.meetingId} {...props} />;
 }
 function TranscriptForMeeting({ meetingId, load = loadTranscript }: Props) {
-  const [text, setText] = useState<string | null>(null);
+  const [document, setDocument] = useState<SavedTranscriptDocument | null>(null);
+  const text = document?.text ?? null;
   const [error, setError] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [scope, setScope] = useState<number | null>(null);
@@ -25,18 +27,18 @@ function TranscriptForMeeting({ meetingId, load = loadTranscript }: Props) {
     const owner = mobileSession.contentScope();
     void load(meetingId).then(value => {
       if (!current) return;
-      if (owner === null || owner !== mobileSession.contentScope()) { setError(true); return; }
-      setScope(owner); setText(value);
+      if (owner === null || owner !== mobileSession.contentScope() || value.meetingId !== meetingId) { setError(true); return; }
+      setScope(owner); setDocument(value);
     })
       .catch(() => { if (current) setError(true); });
     return () => { current = false; };
   }, [meetingId, load, attempt]);
-  const paragraphs = useMemo(() => text?.match(/[\s\S]{1,2000}/gu) ?? [], [text]);
+  const paragraphs = useMemo(() => document ? savedTranscriptRows(document) : [], [document]);
   return <View style={{ flex: 1 }}>
     {!error && text === null && <Text style={{ color: '#94a3b8' }}>Kaydedilmiş konuşma metni yükleniyor…</Text>}
     {error && <>
       <Text accessibilityRole="alert" style={{ color: '#e2e8f0' }}>Kaydedilmiş konuşma metni alınamadı. Sonuç henüz hazır olmayabilir veya erişim sağlanamıyor.</Text>
-      <Pressable accessibilityRole="button" onPress={() => { setError(false); setText(null); setAttempt(value => value + 1); }}>
+      <Pressable accessibilityRole="button" onPress={() => { setError(false); setDocument(null); setAttempt(value => value + 1); }}>
         <Text style={{ color: '#93c5fd', paddingVertical: 12 }}>Yeniden dene</Text>
       </Pressable>
     </>}
@@ -50,8 +52,16 @@ function TranscriptForMeeting({ meetingId, load = loadTranscript }: Props) {
       </Pressable>
     </>}
     {!!exports.message && <Text accessibilityRole="alert" style={{ color: '#e2e8f0' }}>{exports.message}</Text>}
+    {paragraphs.some(item => item.speaker !== undefined) && <Text style={{ color: '#94a3b8' }}>
+      Konuşmacı numaraları bu kayıt içindir; kişi kimliği değildir.
+    </Text>}
     {text !== null && <FlatList data={paragraphs} keyExtractor={(_, index) => String(index)}
       initialNumToRender={4} windowSize={5}
-      renderItem={({ item }) => <Text selectable style={{ color: '#e2e8f0', fontSize: 16 }}>{item}</Text>} />}
+      renderItem={({ item }) => <View>
+        {item.speaker !== undefined && <Text style={{ color: '#93c5fd' }}>
+          {item.speaker === 'unknown' ? 'Konuşmacı bilinmiyor' : `Konuşmacı ${item.speaker}`}
+        </Text>}
+        <Text selectable style={{ color: '#e2e8f0', fontSize: 16 }}>{item.text}</Text>
+      </View>} />}
   </View>;
 }

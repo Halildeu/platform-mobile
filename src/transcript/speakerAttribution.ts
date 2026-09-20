@@ -11,6 +11,12 @@ export function readSpeakerAttribution(value: unknown, text: string, startSample
   if (!Number.isSafeInteger(startSample) || !Number.isSafeInteger(endSample) ||
       (startSample as number) < 0 || (endSample as number) <= (startSample as number)) return;
   const durationMs = Math.floor(((endSample as number) - (startSample as number)) / 16);
+  return readSpeakerAttributionForDuration(value, text, durationMs);
+}
+
+/** Saved canonical windows expose seconds, without PCM sequence/sample identifiers. */
+export function readSpeakerAttributionForDuration(value: unknown, text: string, durationMs: number): SpeakerAttribution | undefined {
+  if (!Number.isSafeInteger(durationMs) || durationMs < 0) return;
   if (!object(value) || Object.keys(value).length !== 2 || typeof value.scope !== 'string' || !uuid.test(value.scope) ||
       !Array.isArray(value.turns) || !value.turns.length || value.turns.length > 512) return;
   const turns: SpeakerTurn[] = [];
