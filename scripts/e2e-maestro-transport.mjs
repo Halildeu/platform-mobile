@@ -5,7 +5,7 @@ import { setTimeout, clearTimeout } from "node:timers";
 import { commandOutcome, runCommand } from "./e2e-maestro-command.mjs";
 
 export const emulatorProcessPattern =
-  "(^|/)(emulator|qemu-system-(x86_64|aarch64))([[:space:]].*)?[[:space:]]-port[[:space:]]+5554([[:space:]]|$)";
+  "(^|/)(emulator|qemu-system-(x86_64|aarch64)(-headless)?)([[:space:]].*)?[[:space:]]-port[[:space:]]+5554([[:space:]]|$)";
 
 // Observe the host server and target transport without persisting adb payloads.
 export function monitorTransport() {
