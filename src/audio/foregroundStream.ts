@@ -1,7 +1,8 @@
 import { encodeGatewayLivePcm16Frame } from './gatewayFrame';
 import { OfflineAudioBuffer } from './offlineBuffer';
+import { readSpeakerAttribution, type SpeakerAttribution } from '../transcript/speakerAttribution';
 
-export interface LiveText { seq: number; text: string; final: boolean; confirmed?: string; tentative?: string }
+export interface LiveText { seq: number; text: string; final: boolean; confirmed?: string; tentative?: string; speakerAttribution?: SpeakerAttribution }
 export interface LiveSocket {
   readyState: number;
   bufferedAmount: number;
@@ -246,7 +247,9 @@ export class ForegroundStream {
         this.onText({ seq: event.seq as number, text: [event.confirmed, event.tentative].filter(Boolean).join(' '), final: false, confirmed: event.confirmed, tentative: event.tentative });
       } else if (event.type === 'final' && typeof event.text === 'string') {
         this.telemetry.finalEvents++; this.telemetry.lastTextUtc = new Date().toISOString();
-        this.onText({ seq: event.seq as number, text: event.text, final: true });
+        const speakerAttribution = readSpeakerAttribution(event.speakerAttribution, event.text, event.source_start_sample, event.source_end_sample);
+        this.onText({ seq: event.seq as number, text: event.text, final: true,
+          ...(speakerAttribution ? { speakerAttribution } : {}) });
       }
     }
   }

@@ -382,8 +382,9 @@ export default function LiveTestScreen() {
           void stopRef.current('Mikrofon başlatma hatası');
         });
       }, (line) => {
+        if (generation.current !== run) return;
         setLines((previous) => applyTranscriptEvent({ lines: previous }, line.final
-          ? { type: 'final', seq: line.seq, text: line.text }
+          ? { type: 'final', seq: line.seq, text: line.text, speakerAttribution: line.speakerAttribution }
           : { type: 'partial', seq: line.seq, confirmed: line.confirmed ?? '', tentative: line.tentative ?? line.text }).lines);
       }, (message) => { log(`Ses bağlantısı hatası: ${message}`); failure.current = message; setStatus(message); void stopRef.current('Ses aktarımı veya WebSocket hatası'); },
       preparedBuffer.buffer, {

@@ -24,6 +24,7 @@ import {
 import { useTranslation } from 'react-i18next';
 
 import type { TranscriptLine } from './transcriptState';
+import { SpeakerNumbering } from './speakerAttribution';
 
 /** Presentation only: keep original sequence IDs for corrections and replay. */
 export function transcriptParagraphs(lines: readonly TranscriptLine[]): TranscriptLine[][] {
@@ -31,6 +32,11 @@ export function transcriptParagraphs(lines: readonly TranscriptLine[]): Transcri
   let current: TranscriptLine[] = [];
   let length = 0;
   for (const line of lines) {
+    if (line.speakerAttribution) {
+      if (current.length) paragraphs.push(current);
+      paragraphs.push([line]); current = []; length = 0;
+      continue;
+    }
     current.push(line);
     length += line.text.length;
     if ((line.status === 'final' || line.status === 'revised') && (/[.!?…][”"')]*$/.test(line.text.trim()) || length >= 400)) {
@@ -59,6 +65,7 @@ export function TranscriptView({
   const { t } = useTranslation();
   const listRef = useRef<FlatList<TranscriptLine[]>>(null);
   const paragraphs = transcriptParagraphs(lines);
+  const [speakers] = useState(() => new SpeakerNumbering());
   // Kullanıcı en altta "yapışık" mı — yukarı kaydırınca false olur, geri dönünce true.
   const [pinnedToBottom, setPinnedToBottom] = useState(true);
 
@@ -88,6 +95,7 @@ export function TranscriptView({
 
   return (
     <View style={{ flex: 1 }}>
+    {lines.some(line => line.speakerAttribution) && <Text style={styles.speakerTag}>{t('transcript.speakerNotice')}</Text>}
     {autoScroll && !pinnedToBottom && <Pressable accessibilityRole="button" onPress={() => {
       setPinnedToBottom(true); listRef.current?.scrollToEnd({ animated: true });
     }}><Text style={styles.revisedTag}>{t('transcript.followLatest')}</Text></Pressable>}
@@ -104,7 +112,17 @@ export function TranscriptView({
         <View style={styles.row}>
           <Text selectable style={styles.text}>{item.map((line, index) => (
             <Text key={line.seq} style={styles[line.status]}>
-              {index > 0 && !/^[,.;:!?…]/.test(line.text) ? ' ' : ''}{line.text}
+              {index > 0 && !/^[,.;:!?…]/.test(line.text) ? ' ' : ''}
+              {line.speakerAttribution ? line.speakerAttribution.turns.map((turn, turnIndex, turns) => {
+                const speaker = speakers.number(line.speakerAttribution!.scope, turn.speaker);
+                const from = turnIndex === 0 ? 0 : turns[turnIndex - 1].textEnd;
+                const end = turnIndex === turns.length - 1 ? line.text.length : turn.textEnd;
+                return <Text key={turnIndex}>
+                  {turnIndex > 0 ? '\n' : ''}
+                  <Text style={styles.speakerTag}>{speaker === undefined ? t('transcript.unknownSpeaker') : t('transcript.speaker', { number: speaker })}: </Text>
+                  {line.text.slice(from, end)}
+                </Text>;
+              }) : line.text}
             </Text>
           ))}</Text>
           {item.some(line => line.status === 'stabilizing') && <Text style={styles.revisedTag}> · {t('transcript.stabilizingTag')}</Text>}
@@ -125,6 +143,7 @@ const styles = StyleSheet.create({
   final: { color: '#e2e8f0' },
   revised: { color: '#e2e8f0' },
   revisedTag: { fontSize: 12, color: '#f59e0b' },
+  speakerTag: { fontSize: 13, color: '#93c5fd' },
   empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   emptyText: { color: '#64748b', fontSize: 14 },
 });
