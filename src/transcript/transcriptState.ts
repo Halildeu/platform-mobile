@@ -13,6 +13,7 @@
  * (FlatList + auto-scroll) consumes `TranscriptState.lines`.
  */
 import type { WsStreamEvent } from '../contracts/wsStreamEvents';
+import type { SpeakerAttribution } from './speakerAttribution';
 
 export type TranscriptLineStatus = 'draft' | 'stabilizing' | 'final' | 'revised';
 
@@ -23,6 +24,7 @@ export interface TranscriptLine {
   readonly confirmed: string;
   readonly tentative: string;
   readonly status: TranscriptLineStatus;
+  readonly speakerAttribution?: SpeakerAttribution;
 }
 
 export interface TranscriptState {
@@ -55,7 +57,7 @@ function upsertSorted(
  */
 export function applyTranscriptEvent(
   state: TranscriptState,
-  event: WsStreamEvent | { type: 'partial'; seq: number; confirmed: string; tentative: string } | { type: 'final'; seq: number; text: string },
+  event: WsStreamEvent | { type: 'partial'; seq: number; confirmed: string; tentative: string } | { type: 'final'; seq: number; text: string; speakerAttribution?: SpeakerAttribution },
 ): TranscriptState {
   switch (event.type) {
     case 'partial': {
@@ -75,13 +77,16 @@ export function applyTranscriptEvent(
     case 'final': {
       const existing = state.lines.find((line) => line.seq === event.seq);
       const alreadySettled = existing?.status === 'final' || existing?.status === 'revised';
-      if (alreadySettled && existing.text === event.text) return state;
+      const speakerAttribution = 'speakerAttribution' in event ? event.speakerAttribution : undefined;
+      if (alreadySettled && existing.text === event.text &&
+          JSON.stringify(existing.speakerAttribution) === JSON.stringify(speakerAttribution)) return state;
       const line: TranscriptLine = {
         seq: event.seq,
         confirmed: event.text,
         tentative: '',
         text: event.text,
         status: alreadySettled ? 'revised' : 'final',
+        ...(speakerAttribution ? { speakerAttribution } : {}),
       };
       return { lines: upsertSorted(state.lines, line) };
     }

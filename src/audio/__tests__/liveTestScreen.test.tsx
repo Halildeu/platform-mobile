@@ -3,6 +3,7 @@ import { Alert, AppState } from 'react-native';
 import LiveTestScreen from '../../../app/live-test';
 import * as api from '../liveTestApi';
 import { clearMeetingViews, saveMeetingView } from '../meetingViewCache';
+import type { LiveText } from '../foregroundStream';
 
 const mockStart = jest.fn().mockResolvedValue(undefined);
 const mockStop = jest.fn();
@@ -16,6 +17,7 @@ const mockPermission = jest.fn();
 const mockDrain = jest.fn();
 let mockFailure: (message: string) => void;
 let mockReady: () => void;
+let mockText: (line: LiveText) => void;
 let mockParams: { notificationMeetingId?: string } = {};
 jest.mock('expo-audio', () => ({
   AudioModule: { requestRecordingPermissionsAsync: (...args: unknown[]) => mockPermission(...args) },
@@ -36,6 +38,7 @@ jest.mock('../foregroundStream', () => ({ ForegroundStream: jest.fn().mockImplem
   (_socket, _ready, _text, failure) => {
     mockFailure = failure;
     mockReady = _ready;
+    mockText = _text;
     return { stop: mockDrain, dispose: jest.fn(), diagnostics: () => ({}) };
   }),
 }));
@@ -69,6 +72,18 @@ async function openAndStart() {
   await act(async () => { alert.mock.calls[0][2]?.[1].onPress?.(); });
   return screen;
 }
+
+it('preserves validated speaker attribution through the actual live screen callback', async () => {
+  mockPermission.mockResolvedValue({ granted: true });
+  const screen = await openAndStart();
+  await act(async () => { mockText({ seq: 0, text: 'Merhaba', final: true, speakerAttribution: {
+    scope: '12345678-1234-3234-8234-123456789012',
+    turns: [{ speaker: 'S1', textStart: 0, textEnd: 7, startMs: 0, endMs: 1000 }],
+  } }); });
+  expect(screen.getByText(/speakerNotice|kişi adı veya kimlik/)).toBeTruthy();
+  expect(screen.getByText(/Merhaba/)).toBeTruthy();
+  screen.unmount();
+});
 
 it('does not cancel startup when the permission dialog temporarily deactivates the app', async () => {
   let resolvePermission!: (value: { granted: boolean }) => void;

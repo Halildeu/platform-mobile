@@ -5,7 +5,7 @@ import * as api from '../liveTestApi';
 
 let mockText: (line: object) => void;
 let mockSnapshot: (snapshot: object) => void;
-const mockStream = { start: jest.fn(async () => {}), stop: jest.fn(), sampleRate: 16000, channels: 1 };
+const mockStream = { start: jest.fn(async () => {}), stop: jest.fn(), sampleRate: 16000, channels: 1, isStreaming: true };
 jest.mock('expo-audio', () => ({ AudioModule: { requestRecordingPermissionsAsync: async () => ({ granted: true }) }, useAudioStream: () => ({ stream: mockStream }) }));
 jest.mock('expo-router', () => ({ useLocalSearchParams: () => ({}) }));
 jest.mock('../backgroundCapture', () => ({ supportsBackgroundCapture: () => false, configureBackgroundCapture: async () => {} }));
@@ -54,6 +54,8 @@ test.each([
     await act(async () => fireEvent.press(screen.getByText('Listeyi yenile')));
     expect(screen.queryByText('✓ Meeting A')).toBeNull();
   }
+  await act(async () => { mockText({ seq: 2, text: 'LATE_A_TRANSCRIPT', final: true }); });
+  expect(screen.queryByText('LATE_A_TRANSCRIPT')).toBeNull();
   if (field === 'transcript') expect(screen.queryByText('SYNTHETIC_A_TRANSCRIPT')).toBeNull();
   else {
     fireEvent.press(screen.getByText('Özet'));
