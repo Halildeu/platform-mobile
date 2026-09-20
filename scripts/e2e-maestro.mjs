@@ -4,10 +4,28 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { setTimeout, clearTimeout } from "node:timers";
 import { monitorTransport } from "./e2e-maestro-transport.mjs";
+import { collectEmulatorHealth } from "./e2e-maestro-emulator.mjs";
 
 const runId = process.env.GITHUB_RUN_ID;
 const attempt = process.env.GITHUB_RUN_ATTEMPT;
 const commit = process.env.GITHUB_SHA;
+const flow = process.env.MAESTRO_FLOW;
+const flowPaths = {
+  "app-launch": ".maestro/flows/01-app-launch.yaml",
+  "transcript-demo": ".maestro/flows/02-transcript-demo.yaml",
+};
+assert.ok(
+  flow === undefined || Object.hasOwn(flowPaths, flow),
+  "Unknown Maestro flow",
+);
+const collectHealth = process.env.MAESTRO_SYNTHETIC_EMULATOR === "1";
+if (collectHealth) {
+  assert.equal(process.env.GITHUB_ACTIONS, "true");
+  assert.ok(
+    Object.hasOwn(flowPaths, flow),
+    "System diagnostics require an isolated synthetic flow",
+  );
+}
 assert.match(runId ?? "", /^\d+$/);
 assert.match(attempt ?? "", /^[1-9]\d*$/);
 assert.match(commit ?? "", /^[a-f0-9]{40}$/);
@@ -18,6 +36,7 @@ const evidence = {
   runId,
   attempt,
   commit,
+  flow: flow ?? "all",
   steps: [],
 };
 
@@ -74,12 +93,20 @@ function execute(name, command, args, timeout) {
 }
 
 snapshot("before-install");
-let status = execute(
-  "install",
-  "adb",
-  ["-s", "emulator-5554", "install", "-r", "artifacts/apk/app-release.apk"],
-  120000,
-);
+let status = 0;
+if (collectHealth) {
+  evidence.emulator = [
+    await collectEmulatorHealth("before-install", directory),
+  ];
+  if (!evidence.emulator[0].healthy) status = 1;
+}
+if (status === 0)
+  status = execute(
+    "install",
+    "adb",
+    ["-s", "emulator-5554", "install", "-r", "artifacts/apk/app-release.apk"],
+    120000,
+  );
 snapshot("after-install");
 if (status === 0) {
   const monitor = monitorTransport();
@@ -99,7 +126,7 @@ if (status === 0) {
         directory,
         "--test-output-dir",
         directory,
-        ".maestro/",
+        flow === undefined ? ".maestro/" : flowPaths[flow],
       ],
       { stdio: "inherit" },
     );
@@ -123,6 +150,11 @@ if (status === 0) {
   // Missing diagnostics must not turn an unexplained flaky run into acceptance.
   if (status === 0 && !evidence.transport.complete) status = 1;
   snapshot("after-maestro");
+}
+if (collectHealth) {
+  const health = await collectEmulatorHealth("after-test", directory);
+  evidence.emulator.push(health);
+  if (status === 0 && !health.healthy) status = 1;
 }
 evidence.exitCode = status;
 writeFileSync(

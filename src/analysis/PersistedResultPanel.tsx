@@ -6,6 +6,7 @@ import { analysisMarkdown } from './exportMarkdown';
 import { persistedResult } from '../audio/liveTestApi';
 import type { PersistedResult } from './persistedResult';
 
+
 type Props = {
   meetingId: string; load?: (id: string) => Promise<PersistedResult>; onDiagnostic?: (message: string) => void;
 };
@@ -68,6 +69,7 @@ function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic }: P
     {result && <>
       <Text style={styles.text}>Oluşturulma: {result.generatedAt}</Text>
       <Text selectable style={styles.text}>Oturum: {result.sessionId}</Text>
+
       <Text style={styles.title}>Özet</Text>
       <Text selectable style={styles.text}>{result.summary || 'Bu sonuçta gösterilebilir özet bulunmuyor.'}</Text>
       <Text style={styles.title}>Kararlar</Text>

@@ -7,6 +7,7 @@ import { useLocalSearchParams } from 'expo-router';
 import { ForegroundStream, type LiveSocket } from '../src/audio/foregroundStream';
 import { applyTranscriptEvent, type TranscriptLine } from '../src/transcript/transcriptState';
 import { TranscriptView } from '../src/transcript/TranscriptView';
+import { SavedTranscript } from '../src/analysis/SavedTranscriptPanel';
 import Constants from 'expo-constants';
 import { createRecordingBuffer } from '../src/audio/recordingBuffer';
 import * as api from '../src/audio/liveTestApi';
@@ -32,6 +33,7 @@ export default function LiveTestScreen() {
   const [selected, setSelected] = useState<string>();
   const [busy, setBusy] = useState(true);
   const [recording, setRecording] = useState(false);
+  const [currentCapture, setCurrentCapture] = useState(false);
   const [background, setBackground] = useState(false);
   const [tab, setTab] = useState<'text' | 'summary' | 'decisions' | 'actions' | 'saved' | 'diagnostics'>('text');
   const [setup, setSetup] = useState(true);
@@ -265,6 +267,7 @@ export default function LiveTestScreen() {
     generation.current++;
     stopAnalysis.current?.(); stopAnalysis.current = null;
     const cached = id ? readMeetingView(id) : undefined;
+    setCurrentCapture(false);
     setSelected(id); setLines(cached?.lines ?? []); setAnalysis(cached?.analysis ?? null); setDiagnostics(cached?.diagnostics ?? []);
     setTab('saved');
     setAnalysisStatus(cached?.analysis ? 'Önceki canlı taslak geri getirildi; kalıcı sonuç Kaydedilen bölümünden doğrulanmalıdır.' : 'Bu ekranda canlı taslak yok; kaydedilmiş sonuç sunucudan kontrol ediliyor.');
@@ -292,6 +295,7 @@ export default function LiveTestScreen() {
     analysisCount.current = 0;
     setDiagnostics([`Mobil tanılama v2 | Deneme: ${Crypto.randomUUID()} | UTC: ${new Date().toISOString()} | Toplantı: ${selected}`, 'Otomatik süre sınırı yok. Ham ses, konuşma içeriği ve token rapora dahil edilmez. Uygulama zorla kapatılırsa son olay kaydedilemeyebilir.']);
     const run = ++generation.current;
+    setCurrentCapture(true);
     setTab('text');
     setBusy(true);
     setLines([]);
@@ -424,7 +428,9 @@ export default function LiveTestScreen() {
       {([['text', 'Metin'], ['summary', 'Özet'], ['decisions', 'Kararlar'], ['actions', 'Aksiyonlar'], ['saved', 'Kaydedilen'], ['diagnostics', 'Tanılama']] as const).map(([key, label]) =>
         <Pressable key={key} accessibilityRole="tab" accessibilityState={{ selected: tab === key }} onPress={() => setTab(key)} style={{ padding: 8, borderBottomWidth: 2, borderBottomColor: tab === key ? '#93c5fd' : 'transparent' }}><Text style={styles.text}>{label}</Text></Pressable>)}
     </View>
-    {tab === 'text' && <View style={{ flex: 1 }}><TranscriptView lines={lines} />{!lines.length && <Text style={styles.note}>Kayıt başladığında konuşmanız burada görünecek.</Text>}</View>}
+    {tab === 'text' && <View style={{ flex: 1 }}>{signedIn && selected && !recording && !busy && !currentCapture
+      ? <SavedTranscript meetingId={selected} />
+      : <><TranscriptView lines={lines} />{!lines.length && <Text style={styles.note}>Kayıt başladığında konuşmanız burada görünecek.</Text>}</>}</View>}
     {tab !== 'text' && <ScrollView style={{ flex: 1 }}>
       {tab === 'saved' && signedIn && selected && !recording && !busy && <PersistedResultPanel key={selected} meetingId={selected} onDiagnostic={log} />}
       {tab === 'saved' && (!signedIn || !selected || recording || busy) && <Text style={styles.note}>Kaydı durdurup bir toplantı seçtikten sonra kalıcı sonucu açabilirsiniz.</Text>}

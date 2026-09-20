@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import { test } from "node:test";
+import { waitForEmulatorWindow } from "./e2e-maestro-emulator.mjs";
 
 const script = fileURLToPath(new URL("./e2e-maestro.mjs", import.meta.url));
 function fixture(t) {
@@ -35,9 +36,30 @@ if (args.includes('track-devices')) {
   }, 30);
   setInterval(() => {}, 1000);
 }
-if (args.includes('install')) process.exit(Number(process.env.INSTALL_EXIT || 0));
-if (args.includes('get-state')) console.log(process.env.STATE || 'device');
-if (args.includes('getprop')) console.log('1');
+if (args.includes('disable-user')) { require('node:fs').writeFileSync('disabled.json', JSON.stringify(args)); process.exit(Number(process.env.DISABLE_EXIT || 0)); }
+if (args.includes('install')) { require('node:fs').writeFileSync('installed.json', JSON.stringify(args)); process.exit(Number(process.env.INSTALL_EXIT || 0)); }
+if (args.includes('get-state')) {
+  const fs = require('node:fs');
+  const ready = fs.existsSync('window-count') && Number(fs.readFileSync('window-count', 'utf8')) >= 2;
+  console.log(process.env.LOST_AFTER_READY && ready ? 'offline' : process.env.STATE || 'device');
+}
+if (args.includes('getprop')) console.log(args.includes('ro.kernel.qemu') ? process.env.QEMU || '1' : '1');
+if (args.includes('path')) { if (process.env.PACKAGE_PROBE_EXIT) process.exit(9); console.log('package:/system/framework/framework-res.apk'); }
+if (args.includes('displays')) {
+  const post = require('node:fs').existsSync('invoked.json');
+  if (process.env.WINDOW_PROBE_EXIT || (post && process.env.POST_PROBE_EXIT)) process.exit(9);
+  const fs = require('node:fs');
+  const count = fs.existsSync('window-count') ? Number(fs.readFileSync('window-count', 'utf8')) : 0;
+  fs.writeFileSync('window-count', String(count + 1));
+  if ((process.env.STARTING_WINDOWS && count < 2) || (post && process.env.POST_NOT_READY)) {
+    console.log('mCurrentFocus=null\\nmFocusedApp=ActivityRecord{918ab0d u0 com.android.sdksetup/.DefaultActivity t6}\\nmObscuringWindow=Window{9e4e1e2 u0 com.android.settings/com.android.settings.FallbackHome}');
+    process.exit(0);
+  }
+  const error = process.env.ERROR_DIALOG || (post && process.env.POST_DIALOG);
+  console.log('mCurrentFocus=Window{123 u0 ' + (error ? 'Application Not Responding: com.android.launcher3' : 'com.android.launcher3/.Launcher') + '}');
+}
+if (args.includes('lastanr')) console.log('SYNTHETIC_ANR_TRACE');
+if (args.includes('logcat')) console.log(process.env.LOG_OVERSIZE ? 'x'.repeat(2 * 1024 * 1024) : 'SYNTHETIC_BOOT_LOG');
 `,
     { mode: 0o755 },
   );
@@ -105,6 +127,27 @@ test("install failure keeps evidence and never invokes Maestro", (t) => {
   assert.equal(run(f, { INSTALL_EXIT: "7" }).status, 7);
   assert.equal(evidence(f).exitCode, 7);
   assert.ok(!existsSync(join(f.cwd, "invoked.json")));
+});
+
+test("isolated flows select exactly one scenario and preserve failures", (t) => {
+  for (const [flow, path] of [
+    ["app-launch", ".maestro/flows/01-app-launch.yaml"],
+    ["transcript-demo", ".maestro/flows/02-transcript-demo.yaml"],
+  ]) {
+    const f = fixture(t);
+    assert.equal(run(f, { MAESTRO_FLOW: flow, MAESTRO_EXIT: "3" }).status, 3);
+    assert.equal(evidence(f).flow, flow);
+    const args = JSON.parse(readFileSync(join(f.cwd, "invoked.json")));
+    assert.equal(args.at(-1), path);
+    assert.ok(!args.includes("--retry"));
+  }
+});
+
+test("unknown flow is rejected before device commands", (t) => {
+  const f = fixture(t);
+  assert.notEqual(run(f, { MAESTRO_FLOW: "../skip-tests" }).status, 0);
+  assert.ok(!existsSync(join(f.cwd, "invoked.json")));
+  assert.ok(!existsSync(join(f.cwd, "artifacts")));
 });
 test("Maestro failure is not hidden by successful diagnostics", (t) => {
   const f = fixture(t);
@@ -213,4 +256,218 @@ test("missing Maestro closes the monitor and preserves executable error", (t) =>
   const result = evidence(f);
   assert.equal(result.steps.find((s) => s.phase === "maestro").error, "ENOENT");
   assert.equal(result.transport.tracker.stoppedByRunner, true);
+});
+
+const synthetic = {
+  GITHUB_ACTIONS: "true",
+  MAESTRO_SYNTHETIC_EMULATOR: "1",
+  MAESTRO_FLOW: "app-launch",
+};
+
+test("AOSP preflight captures pre-Maestro logs without disabling packages", (t) => {
+  const f = fixture(t);
+  assert.equal(run(f, synthetic).status, 0);
+  assert.equal(existsSync(join(f.cwd, "disabled.json")), false);
+  assert.deepEqual(
+    evidence(f).emulator.map((h) => h.healthy),
+    [true, true],
+  );
+  assert.match(
+    readFileSync(
+      join(f.cwd, "artifacts/maestro/emulator-before-install-system-log.txt"),
+      "utf8",
+    ),
+    /SYNTHETIC_BOOT_LOG/,
+  );
+  assert.match(
+    readFileSync(
+      join(f.cwd, "artifacts/maestro/emulator-after-test-last-anr.txt"),
+      "utf8",
+    ),
+    /SYNTHETIC_ANR_TRACE/,
+  );
+  assert.equal(evidence(f).exitCode, 0);
+  assert.ok(existsSync(join(f.cwd, "invoked.json")));
+});
+
+test("unhealthy emulator or focused ANR fails before Maestro and retains postflight", (t) => {
+  for (const env of [
+    { PACKAGE_PROBE_EXIT: "1" },
+    { WINDOW_PROBE_EXIT: "1" },
+    { STATE: "offline" },
+    { ERROR_DIALOG: "1" },
+  ]) {
+    const f = fixture(t);
+    assert.notEqual(run(f, { ...synthetic, ...env }).status, 0);
+    assert.notEqual(evidence(f).exitCode, 0);
+    assert.equal(evidence(f).emulator.length, 2);
+    assert.equal(evidence(f).emulator[0].healthy, false);
+    assert.equal(evidence(f).emulator[0].readiness.checks.length, 1);
+    assert.equal(existsSync(join(f.cwd, "installed.json")), false);
+    assert.equal(existsSync(join(f.cwd, "invoked.json")), false);
+  }
+});
+
+test("postflight health cannot hide a flow failure or wait away a later problem", (t) => {
+  for (const env of [
+    { POST_DIALOG: "1" },
+    { POST_PROBE_EXIT: "1" },
+    { POST_NOT_READY: "1" },
+  ]) {
+    const f = fixture(t);
+    assert.equal(run(f, { ...synthetic, ...env }).status, 1);
+    assert.equal(evidence(f).emulator[0].healthy, true);
+    assert.equal(evidence(f).emulator[1].healthy, false);
+    assert.equal(evidence(f).emulator[1].readiness.checks.length, 1);
+    assert.ok(existsSync(join(f.cwd, "invoked.json")));
+  }
+  const f = fixture(t);
+  assert.equal(
+    run(f, { ...synthetic, MAESTRO_EXIT: "3", POST_DIALOG: "1" }).status,
+    3,
+  );
+  assert.equal(evidence(f).exitCode, 3);
+});
+
+test("boot-completed with SDK setup focus waits before install and preserves first evidence", (t) => {
+  const f = fixture(t);
+  assert.equal(run(f, { ...synthetic, STARTING_WINDOWS: "1" }).status, 0);
+  const before = evidence(f).emulator[0];
+  assert.deepEqual(
+    before.readiness.checks.map((c) => c.state),
+    ["starting", "starting", "ready", "ready"],
+  );
+  assert.equal(before.healthy, true);
+  const artifacts = join(f.cwd, "artifacts/maestro");
+  assert.match(
+    readFileSync(
+      join(artifacts, "emulator-before-install-windows.txt"),
+      "utf8",
+    ),
+    /mCurrentFocus=null/,
+  );
+  assert.match(
+    readFileSync(
+      join(artifacts, "emulator-before-install-windows-final.txt"),
+      "utf8",
+    ),
+    /com.android.launcher3\/\.Launcher/,
+  );
+  assert.ok(existsSync(join(f.cwd, "installed.json")));
+  assert.ok(existsSync(join(f.cwd, "invoked.json")));
+});
+
+const launcher = "mCurrentFocus=Window{123 u0 com.android.launcher3/.Launcher}";
+test("core transport is checked again after UI readiness before installation", (t) => {
+  const f = fixture(t);
+  assert.equal(run(f, { ...synthetic, LOST_AFTER_READY: "1" }).status, 1);
+  const before = evidence(f).emulator[0];
+  assert.equal(before.readiness.ready, true);
+  assert.equal(before.ready, false);
+  assert.equal(before.healthy, false);
+  assert.ok(before.probes.some((p) => p.name === "transport-ready"));
+  assert.equal(existsSync(join(f.cwd, "installed.json")), false);
+  assert.equal(existsSync(join(f.cwd, "invoked.json")), false);
+});
+const setup = "mCurrentFocus=Window{123 u0 com.android.settings/.FallbackHome}";
+function windowWait(sequence, options = {}) {
+  let elapsed = 0;
+  let calls = 0;
+  const timeouts = [];
+  const result = waitForEmulatorWindow(
+    (timeout) => {
+      timeouts.push(timeout);
+      elapsed += Math.min(options.probeMs ?? 100, timeout);
+      return sequence[Math.min(calls++, sequence.length - 1)];
+    },
+    {
+      now: () => elapsed,
+      pause: async (ms) => {
+        elapsed += ms;
+      },
+      ...options,
+    },
+  );
+  return { result, timeouts };
+}
+
+test("UI readiness deadline includes probe time and bounds the final command", async () => {
+  const wait = windowWait([setup], { probeMs: 5000 });
+  const result = await wait.result;
+  assert.equal(result.ready, false);
+  assert.equal(result.reason, "startup-timeout");
+  assert.equal(result.elapsedMs, 30000);
+  assert.equal(wait.timeouts.at(-1), 2500);
+  assert.equal(wait.timeouts.length, 6);
+});
+
+test("a setup transition resets consecutive ready samples", async () => {
+  const result = await windowWait([launcher, setup, launcher, launcher]).result;
+  assert.equal(result.ready, true);
+  assert.deepEqual(
+    result.checks.map((c) => c.state),
+    ["ready", "starting", "ready", "ready"],
+  );
+});
+
+test("waiting stops immediately on a failed probe, malformed focus or ANR", async () => {
+  for (const [windows, reason] of [
+    [null, "probe-failed"],
+    ["unexpected output", "invalid-window-state"],
+    [
+      "mCurrentFocus=Window{123 u0 Application Not Responding: com.android.launcher3}",
+      "error-dialog",
+    ],
+  ]) {
+    const result = await windowWait([setup, windows, launcher]).result;
+    assert.equal(result.ready, false);
+    assert.equal(result.reason, reason);
+    assert.equal(result.checks.length, 2);
+  }
+});
+
+test("postflight never waits for SDK setup to finish", async () => {
+  const result = await windowWait([setup, launcher], { waitForBoot: false })
+    .result;
+  assert.equal(result.ready, false);
+  assert.equal(result.reason, "not-ready");
+  assert.equal(result.checks.length, 1);
+});
+
+test("system capture refuses non-CI, unscoped flows and non-emulator transports", (t) => {
+  for (const env of [
+    { GITHUB_ACTIONS: "false" },
+    { MAESTRO_FLOW: "live-test" },
+  ]) {
+    const f = fixture(t);
+    assert.notEqual(run(f, { ...synthetic, ...env }).status, 0);
+    assert.equal(existsSync(join(f.cwd, "artifacts")), false);
+  }
+  const f = fixture(t);
+  assert.equal(run(f, { ...synthetic, QEMU: "0" }).status, 1);
+  assert.equal(
+    existsSync(
+      join(f.cwd, "artifacts/maestro/emulator-before-install-system-log.txt"),
+    ),
+    false,
+  );
+  assert.equal(existsSync(join(f.cwd, "invoked.json")), false);
+});
+
+test("oversized system log is bounded and cannot produce healthy acceptance", (t) => {
+  const f = fixture(t);
+  assert.equal(run(f, { ...synthetic, LOG_OVERSIZE: "1" }).status, 1);
+  const result = evidence(f).emulator[0];
+  assert.equal(result.healthy, false);
+  assert.equal(
+    result.probes.find((p) => p.name === "system-log").truncated,
+    true,
+  );
+  assert.ok(
+    readFileSync(
+      join(f.cwd, "artifacts/maestro/emulator-before-install-system-log.txt"),
+    ).length <=
+      512 * 1024,
+  );
+  assert.equal(existsSync(join(f.cwd, "invoked.json")), false);
 });

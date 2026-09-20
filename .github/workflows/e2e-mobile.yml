@@ -11,6 +11,10 @@ on:
         options:
           - emulator
           - device
+      fcm_test:
+        description: "Enable isolated Android FCM TEST (requires approved organization and client config)"
+        type: boolean
+        default: false
   pull_request:
     paths:
       - "app/**"
@@ -19,6 +23,8 @@ on:
       - "assets/**"
       - ".maestro/**"
       - "app.json"
+      - "app.config.js"
+      - "scripts/fcm-config.check.js"
       - "package*.json"
       - "babel.config.js"
       - "scripts/e2e-apk*"
@@ -59,6 +65,26 @@ jobs:
         run: node --test scripts/e2e-apk.test.mjs scripts/e2e-maestro.test.mjs
       - name: Install locked dependencies
         run: npm ci
+      - name: Validate FCM build configuration guard
+        run: node --test scripts/fcm-config.check.js
+      - name: Prepare isolated Android FCM TEST configuration
+        if: ${{ inputs.fcm_test }}
+        env:
+          FCM_CLIENT_JSON: ${{ secrets.MOBILE_FCM_TEST_CLIENT_JSON }}
+          TEST_ORG: ${{ vars.MOBILE_NATIVE_PUSH_TEST_ORG_ID }}
+          TARGET: ${{ inputs.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$TARGET" = device
+          test -n "$FCM_CLIENT_JSON"
+          test -n "$TEST_ORG"
+          [[ "$TEST_ORG" != *$'\n'* && "$TEST_ORG" != *$'\r'* ]]
+          umask 077
+          printf '%s' "$FCM_CLIENT_JSON" > "$RUNNER_TEMP/google-services-test.json"
+          echo "MOBILE_FCM_TEST=1" >> "$GITHUB_ENV"
+          echo "MOBILE_FCM_CONFIG_PATH=$RUNNER_TEMP/google-services-test.json" >> "$GITHUB_ENV"
+          echo "MOBILE_NATIVE_PUSH_ORG_ID=$TEST_ORG" >> "$GITHUB_ENV"
       - name: Generate native project from this checkout
         run: npx expo prebuild --platform android --no-install
       - name: Build APK from this checkout
@@ -83,14 +109,22 @@ jobs:
         if: always()
         run: df -h . "$RUNNER_TEMP"
 
-  android-maestro:
+  android-maestro-flow:
     if: ${{ inputs.target != 'device' }}
     needs: build-android-apk
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Independent emulator lifecycle: a suite-boundary ADB disconnect must not
+    # poison the next flow. Both matrix jobs remain required; no flow retries.
+    strategy:
+      fail-fast: false
+      matrix:
+        flow: [app-launch, transcript-demo]
     env:
       CI: "1"
       MAESTRO_CLI_NO_ANALYTICS: "1"
+      MAESTRO_FLOW: ${{ matrix.flow }}
+      MAESTRO_SYNTHETIC_EMULATOR: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -133,13 +167,20 @@ jobs:
         with:
           api-level: 35
           arch: x86_64
-          target: google_apis
+          # These two unauthenticated UI flows have no Google/FCM dependency.
+          # Run35344006973's Pixel Launcher ANR obscured the app. Use AOSP
+          # instead of disabling unrelated Google packages one by one.
+          target: default
           disable-animations: true
           script: node scripts/e2e-maestro.mjs
-      - name: Require both successful-flow screenshots
+      - name: Require selected flow screenshots
         run: |
-          test -n "$(find artifacts/maestro -type f -name '*app-launch-success*.png' -print -quit)"
-          test -n "$(find artifacts/maestro -type f -name '*transcript-revised-demo*.png' -print -quit)"
+          if [ "$MAESTRO_FLOW" = app-launch ]; then
+            test -n "$(find artifacts/maestro -type f -name '*app-launch-success*.png' -print -quit)"
+          else
+            test -n "$(find artifacts/maestro -type f -name '*transcript-revised-demo*.png' -print -quit)"
+            test -n "$(find artifacts/maestro -type f -name '*transcript-replayed-demo*.png' -print -quit)"
+          fi
       - name: Measure disk after emulator
         if: always()
         run: df -h . "$RUNNER_TEMP"
@@ -147,7 +188,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: android-maestro-${{ github.sha }}-attempt-${{ github.run_attempt }}
+          name: android-maestro-${{ matrix.flow }}-${{ github.sha }}-attempt-${{ github.run_attempt }}
           path: |
             artifacts/maestro/
             artifacts/apk/manifest.json
@@ -155,3 +196,14 @@ jobs:
             transcript-revised-demo.png
           if-no-files-found: warn
           retention-days: 7
+
+  android-maestro:
+    if: ${{ always() && inputs.target != 'device' }}
+    needs: [build-android-apk, android-maestro-flow]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require build and every isolated flow
+        env:
+          BUILD_RESULT: ${{ needs.build-android-apk.result }}
+          FLOWS_RESULT: ${{ needs.android-maestro-flow.result }}
+        run: test "$BUILD_RESULT" = success && test "$FLOWS_RESULT" = success
