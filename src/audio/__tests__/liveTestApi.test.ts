@@ -2,6 +2,7 @@ import { begin, createMeeting, finish, persistedResult } from '../liveTestApi';
 import { mobileSession } from '../../auth/mobileSession';
 import * as SecureStore from 'expo-secure-store';
 import { createHash } from 'node:crypto';
+import { BUFFER_JOURNAL_KEY } from '../nativeBufferJournal';
 const requestId = '12345678-1234-1234-1234-123456789abc';
 const meetingId = '12345678-1234-1234-1234-123456789012';
 const claims = { iss: 'https://testai.acik.com/realms/platform-test', sub: 'test-user', companyId: 'test-company' };
@@ -14,11 +15,32 @@ const linked = { ...receipt, sessionId: requestId, meetingStatus: 'IN_PROGRESS',
 let stored: string | null = null;
 beforeEach(() => {
   stored = JSON.stringify(receipt);
-  jest.spyOn(SecureStore, 'getItemAsync').mockImplementation(async () => stored);
+  jest.spyOn(SecureStore, 'getItemAsync').mockImplementation(async readKey => readKey === key ? stored : null);
   jest.spyOn(SecureStore, 'setItemAsync').mockImplementation(async (_key, value) => { stored = value; });
   jest.spyOn(SecureStore, 'deleteItemAsync').mockImplementation(async () => { stored = null; });
 });
 afterEach(() => { jest.restoreAllMocks(); });
+
+it.each(['creating', 'ready', 'lost', 'deleting'])('refuses HTTP finish before durable buffer recovery: %s', async state => {
+  const id = createHash('sha256').update(JSON.stringify([ownerHash, receipt.externalSessionId])).digest('hex');
+  const journal = JSON.stringify({ version: 1, records: [{ id, ownerHash, sessionId: receipt.externalSessionId,
+    retentionMs: 1000, state, ...(state === 'deleting' ? { outcome: 'lost' } : {}) }] });
+  jest.spyOn(SecureStore, 'getItemAsync').mockImplementation(async name => name === BUFFER_JOURNAL_KEY ? journal : stored);
+  const fetchMock = jest.spyOn(global, 'fetch');
+  await expect(finish(jwt, receipt.externalSessionId)).rejects.toThrow('Bekleyen veya eksik');
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(stored).toBe(JSON.stringify(receipt));
+});
+
+it('unreadable audio journal cannot become implicit permission to finish', async () => {
+  jest.spyOn(SecureStore, 'getItemAsync').mockImplementation(async name => {
+    if (name === BUFFER_JOURNAL_KEY) throw new Error('locked');
+    return stored;
+  });
+  const fetchMock = jest.spyOn(global, 'fetch');
+  await expect(finish(jwt, receipt.externalSessionId)).rejects.toThrow();
+  expect(fetchMock).not.toHaveBeenCalled();
+});
 jest.mock('expo-auth-session', () => ({}));
 jest.mock('expo-crypto', () => ({ randomUUID: () => '12345678-1234-1234-1234-123456789abc',
   CryptoDigestAlgorithm: { SHA256: 'SHA256' }, digestStringAsync: async (_algorithm: string, value: string) =>

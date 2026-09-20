@@ -24,6 +24,9 @@ export interface StoredChunk extends PendingChunk {
  * ordered by `chunkSeq` and treat `chunkSeq` as a unique key within a session.
  */
 export interface ChunkStore {
+  /** Durable stores commit a loss marker and row deletion in one transaction. */
+  discard?(chunkSeq: number, reason: 'expired' | 'evicted'): void;
+  losses?(): { expired: number; evicted: number };
   /** Insert, or replace an existing chunk with the same chunkSeq (idempotent). */
   put(chunk: StoredChunk): void;
   /** All pending chunks, ascending by chunkSeq. */
@@ -98,6 +101,10 @@ export class OfflineAudioBuffer {
   private readonly now: () => number;
   private droppedTotal = 0;
   private purgedTotal = 0;
+  private sealed = false;
+  /** Prevent all future queue mutation once its terminal receipt is being persisted. */
+  seal(): void { this.sealed = true; }
+  private assertMutable(): void { if (this.sealed) throw new Error('Ses tamponu kapanışı doğrulanıyor.'); }
 
   constructor(options: OfflineAudioBufferOptions = {}) {
     this.store = options.store ?? new InMemoryChunkStore();
@@ -107,6 +114,9 @@ export class OfflineAudioBuffer {
     if (!Number.isSafeInteger(this.maxChunks) || this.maxChunks < 1 || !Number.isSafeInteger(this.maxBytes) || this.maxBytes < 2 ||
       !Number.isSafeInteger(this.ttlMs) || this.ttlMs < 0) throw new Error('Invalid buffer bounds');
     this.now = options.now ?? Date.now;
+    const losses = this.store.losses?.();
+    this.droppedTotal = losses?.evicted ?? 0;
+    this.purgedTotal = losses?.expired ?? 0;
   }
 
   /**
@@ -115,6 +125,7 @@ export class OfflineAudioBuffer {
    * auto-purged first (KVKK), then the buffer is bounded by dropping the oldest.
    */
   enqueue(chunk: PendingChunk): void {
+    this.assertMutable();
     if (!Number.isSafeInteger(chunk.chunkSeq) || chunk.chunkSeq < 0 || !Number.isSafeInteger(chunk.capturedAtMs) || chunk.capturedAtMs < 0 ||
       !chunk.pcm16.length || chunk.pcm16.length % 2 || chunk.pcm16.length > this.maxBytes) throw new Error('Invalid PCM chunk');
     this.purgeExpired();
@@ -130,7 +141,8 @@ export class OfflineAudioBuffer {
     while (this.store.size() > this.maxChunks || this.bytes() > this.maxBytes) {
       const oldest = this.store.oldest();
       if (oldest === null) break;
-      this.store.remove(oldest.chunkSeq);
+      if (this.store.discard) this.store.discard(oldest.chunkSeq, 'evicted');
+      else this.store.remove(oldest.chunkSeq);
       this.inFlight.delete(oldest.chunkSeq);
       this.droppedTotal += 1;
     }
@@ -142,12 +154,14 @@ export class OfflineAudioBuffer {
    * when TTL is disabled. Returns the number purged.
    */
   purgeExpired(): number {
+    this.assertMutable();
     if (this.ttlMs <= 0) return 0;
     const cutoff = this.now() - this.ttlMs;
     let purged = 0;
     for (const chunk of this.store.list()) {
       if (chunk.enqueuedAtMs <= cutoff) {
-        this.store.remove(chunk.chunkSeq);
+        if (this.store.discard) this.store.discard(chunk.chunkSeq, 'expired');
+        else this.store.remove(chunk.chunkSeq);
         this.inFlight.delete(chunk.chunkSeq);
         purged += 1;
         // Preserve evidence if deleting a later row throws; an earlier loss is real.
@@ -164,6 +178,7 @@ export class OfflineAudioBuffer {
    * pending until acknowledge() receives verified delivery evidence.
    */
   drain(send: (chunk: PendingChunk) => boolean): DrainResult {
+    this.assertMutable();
     this.purgeExpired();
     let sent = 0;
     for (const chunk of this.store.list()) {
@@ -183,6 +198,7 @@ export class OfflineAudioBuffer {
 
   /** Call only after a validated server receipt, never from socket.send(). */
   acknowledge(chunkSeq: number): void {
+    this.assertMutable();
     if (!this.inFlight.has(chunkSeq)) return;
     this.store.remove(chunkSeq);
     this.inFlight.delete(chunkSeq);
@@ -190,6 +206,7 @@ export class OfflineAudioBuffer {
 
   /** Unacknowledged chunks become eligible for replay on a new connection. */
   resetInFlight(): void {
+    this.assertMutable();
     this.inFlight.clear();
   }
 
@@ -209,6 +226,7 @@ export class OfflineAudioBuffer {
   }
 
   clear(): void {
+    this.assertMutable();
     this.store.clear();
     this.inFlight.clear();
   }

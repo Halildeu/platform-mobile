@@ -118,6 +118,7 @@ export default function LiveTestScreen() {
     try {
       const drained = await connection?.stop();
       log(`Ses akışı kapanış sonucu: ${drained ? 'drained doğrulandı' : 'drained doğrulanamadı'}`);
+      if (drained) await audioBuffer.current?.confirmDrained();
       if (id && token.current) { log('HTTP kayıt kapanışı başlatıldı'); token.current = await api.validSession(15000); await api.finish(token.current.jwt, id); log('HTTP kayıt kapanışı: FINISHED yanıtı doğrulandı'); }
       if (!failure.current && stopAnalysis.current && !analysisReceived.current) {
         setStatus('Ses kaydı bitti; analiz sonucu en fazla 20 saniye bekleniyor…');
