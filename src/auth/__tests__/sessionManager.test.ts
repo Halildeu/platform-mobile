@@ -13,6 +13,27 @@ function setup() {
 }
 const expired = { jwt: 'old', expiresAt: 900, refreshToken: 'refresh' };
 
+it('snapshot never loads or renews credentials and disappears during account changes', async () => {
+  const { manager, io } = setup();
+  expect(manager.snapshot()).toBeNull();
+  expect(io.read).not.toHaveBeenCalled();
+  await manager.save({ ...expired, expiresAt: 500000 });
+  expect(manager.snapshot()).toEqual({ jwt: 'old', expiresAt: 500000 });
+  const clearing = manager.clear();
+  expect(manager.snapshot()).toBeNull();
+  await clearing;
+  await manager.save(expired);
+  expect(manager.snapshot()).toBeNull();
+  expect(io.refresh).not.toHaveBeenCalled();
+  let finish!: () => void;
+  io.write.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const saving = manager.save({ ...expired, jwt: 'new-account', expiresAt: 500000 });
+  expect(manager.snapshot()).toBeNull();
+  while (!finish) await Promise.resolve();
+  finish(); await saving;
+  expect(manager.snapshot()?.jwt).toBe('new-account');
+});
+
 it('restores a persisted session without unnecessary refresh', async () => {
   const { io, manager } = setup();
   await manager.save({ ...expired, expiresAt: 500000 });

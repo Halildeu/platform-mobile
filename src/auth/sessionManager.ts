@@ -19,6 +19,13 @@ export class SessionManager {
     refresh(token: string): Promise<Session>; revoke(session: Session): Promise<void>;
   }, private readonly now = Date.now) {}
 
+  /** In-memory identity only: notification presentation must never restore or refresh. */
+  snapshot(): Pick<Session, 'jwt' | 'expiresAt'> | null {
+    const value = this.current;
+    return this.loaded && value && value.expiresAt > this.now()
+      ? { jwt: value.jwt, expiresAt: value.expiresAt } : null;
+  }
+
   private ordered<T>(operation: () => Promise<T>): Promise<T> {
     const next = this.writes.then(operation, operation);
     this.writes = next.catch(() => {});

@@ -4,6 +4,15 @@ Backend counterpart: platform-backend#1174. Tracks platform-mobile#9; no closure
 
 Adds explicit notification permission rationale, native Expo FCM/APNs token registration, refresh on foreground/token change, and owner-bound logout cleanup. Enrollment saves a token-free SecureStore cancellation receipt before network access. Lost responses remain removable by installation ID. Rotations and logout are serialized; a delayed permission dialog cannot enroll after logout.
 
+Token-change callbacks consume the supplied `DevicePushToken` directly. They
+never call `getDevicePushTokenAsync`, which can emit another token-change event
+in Expo. Foreground refresh may request a token; both paths validate platform,
+current owner, configuration and enabled receipt. Generation/session/scope are
+checked again inside the ordered operation after storage reads. A permission
+response from before logout cannot rotate or disable a later enrollment.
+Foreground display policy and its local deadline are documented in
+[native-notifications.md](native-notifications.md).
+
 Disabled by default. After backend deployment/configuration, set extra.nativePush.enabled=true, environment=TEST and orgId to the authorized TEST organization. Android requires matching Firebase package configuration; iOS requires APNs signing capability and provider environment. No credential belongs in this file or APK.
 
 ## Isolated Android FCM TEST build
@@ -27,6 +36,13 @@ production credential approval.
 
 Offline logout still clears the login session but reports incomplete server cleanup; the receipt prevents another account from taking it over. Reauthenticate as the original account and disable notifications to complete cleanup. This does not guarantee remote revocation while offline.
 
-Validation: full 235-test suite passed; three additional native permission/registration/logout-dialog tests passed. Typecheck/lint and Android/iOS exports passed. Web export failed at expo-sqlite's missing wa-sqlite.wasm; no all-platform success claimed. Provider and physical-device delivery/tap/account-switch tests remain unperformed. Combined-source review is pending.
+Earlier validation on the registration source: full 235-test suite plus three
+native permission/registration/logout-dialog tests, typecheck/lint and
+Android/iOS exports passed. Web export failed at expo-sqlite's missing
+wa-sqlite.wasm; no all-platform success claimed. New token-event and foreground
+regressions cover recursion, wrong scope/platform, stale permission answers,
+logout, storage failure and a slow handler. Current commit/CI evidence belongs
+in the accompanying source review; earlier exports do not validate new changes.
+Provider and physical-device delivery/tap/account-switch tests remain required.
 
 Acceptance: authorized TEST account enables notifications; submit an authorized meeting event; observe background and foreground phone delivery; tap opens the matching meeting; rotate token; log out and verify old-account delivery stops; switch accounts; test offline cleanup; repeat on iOS. Retest microphone/result/reopen regression in installed package. Do not treat export or registration success as delivery acceptance.
