@@ -11,6 +11,7 @@ export function analysisMarkdown(snapshot: AnalysisSnapshot | PersistedResult): 
   const saved = 'analysisRunId' in snapshot;
   const text = ['# Toplantı analizi', '',
     saved ? '> Kaydedilmiş toplantı sonucu.' : snapshot.partial ? '> Canlı sonuç: toplantı sürerken değişebilir.' : '> Son analiz çıktısı.',
+    ...(saved && snapshot.incompleteRecordingCount ? ['> Bu toplantıda eksik kapatılan kayıt var; sonuç konuşmanın tamamını kapsamayabilir.'] : []),
     saved ? `Oluşturulma: ${plain(snapshot.generatedAt)}` : `Sürüm: ${snapshot.version}`, '', '## Özet', '',
     snapshot.summary ? plain(snapshot.summary) : 'Gösterilebilir özet henüz yok.', '', '## Kararlar', '',
     ...snapshot.decisions.map((decision) => `- ${plain(decision)}`),

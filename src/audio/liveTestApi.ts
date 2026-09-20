@@ -16,9 +16,19 @@ export const CLIENT_ID = 'platform-mobile';
 export const REDIRECT_URI = 'workcube://oauthredirect';
 const LIFECYCLE_KEY = 'platform-mobile.platform-test.recording-lifecycle.v1';
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-type PendingLifecycle = { ownerHash: string; meetingId: string; externalSessionId: string; startedAt: string; endedAt: string | null };
+// Reference identity distinguishes a verified 404 from an untrusted 200 JSON payload.
+const ABSENT_GATEWAY_RECEIPT = Object.freeze({ absent: true });
+type PendingLifecycle = { ownerHash: string; meetingId: string; externalSessionId: string; startedAt: string; endedAt: string | null; version?: 2; completion?: 'unknown' | 'confirmed'; abandon?: { endedAt: string; canonical: boolean } };
 let lifecycleWork: Promise<unknown> = Promise.resolve();
 let activeLifecycleSession: string | null = null;
+let stoppedLifecycleSession: string | null = null;
+/** Local microphone state only; this never grants permission to finish on the server. */
+export function captureStopped(sessionId: string): void {
+  if (activeLifecycleSession === sessionId) {
+    activeLifecycleSession = null;
+    stoppedLifecycleSession = sessionId;
+  }
+}
 function orderedLifecycle<T>(work: () => Promise<T>): Promise<T> {
   const next = lifecycleWork.then(work, work);
   lifecycleWork = next.catch(() => {});
@@ -49,7 +59,10 @@ async function readLifecycle(jwt: string): Promise<PendingLifecycle | null> {
     if (parsed && typeof parsed.ownerHash === 'string' && /^[a-f0-9]{64}$/.test(parsed.ownerHash) && UUID.test(parsed.meetingId)
       && /^SES-[A-Za-z0-9._:-]{1,124}$/.test(parsed.externalSessionId) && validInstant(parsed.startedAt)
       && (parsed.endedAt === null || (validInstant(parsed.endedAt)
-        && Date.parse(parsed.endedAt) >= Date.parse(parsed.startedAt)))) value = parsed;
+        && Date.parse(parsed.endedAt) >= Date.parse(parsed.startedAt)))
+      && (parsed.version === undefined || (parsed.version === 2 && ['unknown', 'confirmed'].includes(parsed.completion)))
+      && (parsed.abandon === undefined || (parsed.version === 2 && validInstant(parsed.abandon?.endedAt)
+        && Date.parse(parsed.abandon.endedAt) >= Date.parse(parsed.startedAt) && typeof parsed.abandon.canonical === 'boolean'))) value = parsed;
   } catch { /* A corrupt receipt must not silently allow a new recording. */ }
   if (!value) throw new Error('Bekleyen kayıt bağlantısı doğrulanamadı. Yeni kayıt başlatılmadı.');
   if (value.ownerHash !== await lifecycleOwner(jwt)) throw new Error('Bekleyen kayıt için önceki kullanıcıyla giriş gerekli.');
@@ -76,7 +89,31 @@ async function syncLifecycle(jwt: string, pending: PendingLifecycle): Promise<vo
     throw new Error('Toplantı kayıt bağlantısı doğrulanamadı.');
   }
 }
+async function clearLifecycle(): Promise<void> {
+  try {
+    await SecureStore.deleteItemAsync(LIFECYCLE_KEY);
+    if (await SecureStore.getItemAsync(LIFECYCLE_KEY) !== null) throw new Error();
+  } catch { throw new Error('Kayıt bağlantısı temizliği doğrulanamadı.'); }
+}
+function matchesLifecycle(result: Record<string, unknown> | null, pending: PendingLifecycle, endedAt: string): boolean {
+  return !!result && !Array.isArray(result) && result.meetingId === pending.meetingId && UUID.test(String(result.sessionId))
+    && result.externalSessionId === pending.externalSessionId && validInstant(result.startedAt)
+    && Date.parse(result.startedAt) === Date.parse(pending.startedAt) && validInstant(result.endedAt)
+    && Date.parse(result.endedAt) === Date.parse(endedAt);
+}
 async function finishPending(jwt: string, pending: PendingLifecycle): Promise<void> {
+  if (pending.abandon) throw new Error('Eksik kayıt kapanışı bekliyor; tamamlandı olarak kapatılamaz.');
+  if (pending.version !== 2 || pending.completion !== 'confirmed') {
+    if (pending.version === undefined && pending.endedAt !== null) {
+      const prior = await request(`/api/v1/admin/meetings/${pending.meetingId}/recording-lifecycle/${encodeURIComponent(pending.externalSessionId)}`, jwt);
+      if (!matchesLifecycle(prior, pending, pending.endedAt) || prior.recordingIncomplete !== false) {
+        throw new Error('Önceki kaydın sunucu durumu eşleşmedi; kayıt korunuyor.');
+      }
+      // Read-only reconciliation, NOT proof of lossless audio or permission for a new finish event.
+      await clearLifecycle(); return;
+    }
+    throw new Error('Sesin eksiksiz kapanışı doğrulanmadı. Bekleyen kayıt bölümünü açın.');
+  }
   await bufferJournal.assertFinishAllowed(pending.ownerHash, pending.externalSessionId);
   if (pending.endedAt === null) {
     const finishedAtMs = await finishGateway(jwt, pending.externalSessionId);
@@ -87,10 +124,7 @@ async function finishPending(jwt: string, pending: PendingLifecycle): Promise<vo
     await writeLifecycle(pending);
   }
   await syncLifecycle(jwt, pending);
-  try {
-    await SecureStore.deleteItemAsync(LIFECYCLE_KEY);
-    if (await SecureStore.getItemAsync(LIFECYCLE_KEY) !== null) throw new Error();
-  } catch { throw new Error('Kayıt bağlantısı temizliği doğrulanamadı.'); }
+  await clearLifecycle();
 }
 export const CONSENT = 'Bu kısa test sırasında mikrofon sesim, konuşmamı yazıya dönüştürmek için Workcube sunucusuna şifreli bağlantıyla iletilecek. Cihazda ses dosyası saklanmayacak. Ses işlemeyi kabul ediyorum.';
 
@@ -141,7 +175,7 @@ export async function login(): Promise<{ jwt: string; expiresAt: number }> {
   return validSession();
 }
 
-async function request(path: string, jwt: string, body?: object, key?: string, method?: 'PUT'): Promise<Record<string, unknown>> {
+async function request(path: string, jwt: string, body?: object, key?: string, method?: 'PUT', allowMissingSession = false): Promise<Record<string, unknown>> {
   const controller = new AbortController();
   const correlationId = Crypto.randomUUID();
   const utc = new Date().toISOString();
@@ -169,6 +203,7 @@ async function request(path: string, jwt: string, body?: object, key?: string, m
       }
       const payload: unknown = await response.json().catch(() => null);
       const details = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+      if (allowMissingSession && response.status === 404 && details.code === 'AUDIO_GATEWAY_SESSION_NOT_FOUND') return ABSENT_GATEWAY_RECEIPT;
       const serverId = details.correlationId ?? response.headers?.get('X-Correlation-Id');
       const safeId = typeof serverId === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(serverId)
         ? serverId : correlationId;
@@ -191,7 +226,7 @@ export async function persistedResult(meetingId: string) {
   await orderedLifecycle(async () => {
     const pending = await readLifecycle(session.jwt);
     // Only a confirmed finish is replayed while reading; never stop an active capture.
-    if (pending?.meetingId === meetingId && pending.endedAt !== null) await finishPending(session.jwt, pending);
+    if (pending?.meetingId === meetingId && pending.endedAt !== null && !pending.abandon) await finishPending(session.jwt, pending);
   });
   return parsePersistedResult(await request(`/api/v1/admin/meetings/${meetingId}/intelligence/result`, session.jwt), meetingId);
 }
@@ -252,7 +287,7 @@ async function beginLinked(jwt: string, meetingId: string, ownerHash: string, on
     throw new Error('Ses oturumu başlangıç zamanı doğrulanamadı.');
   }
   const pending: PendingLifecycle = { ownerHash, meetingId, externalSessionId: session.sessionId,
-    startedAt: new Date(session.sessionStartMs).toISOString(), endedAt: null };
+    startedAt: new Date(session.sessionStartMs).toISOString(), endedAt: null, version: 2, completion: 'unknown' };
   try {
     await writeLifecycle(pending);
     onStage?.('Toplantı kayıt bağlantısı doğrulanıyor');
@@ -263,7 +298,7 @@ async function beginLinked(jwt: string, meetingId: string, ownerHash: string, on
     try {
       const endedAtMs = await finishGateway(jwt, session.sessionId);
       if (endedAtMs >= session.sessionStartMs && endedAtMs <= 8640000000000000) {
-        await writeLifecycle({ ...pending, endedAt: new Date(endedAtMs).toISOString() });
+        await writeLifecycle({ ...pending, endedAt: new Date(endedAtMs).toISOString(), completion: 'confirmed' });
       }
     } catch { /* Unconfirmed cleanup is not a successful recording start. */ }
     throw error;
@@ -273,11 +308,67 @@ async function beginLinked(jwt: string, meetingId: string, ownerHash: string, on
   return session.sessionId;
 }
 
+/** Only the active capture can persist new proof; retries consume that proof, never manufacture it. */
+export function completeCapture(jwt: string, sessionId: string, uninterruptedDrain: boolean): Promise<boolean> {
+  return orderedLifecycle(async () => {
+    captureStopped(sessionId);
+    if (stoppedLifecycleSession !== sessionId) throw new Error('Etkin kayıt eşleşmedi; kapanış onayı saklanmadı.');
+    stoppedLifecycleSession = null;
+    const pending = await readLifecycle(jwt);
+    if (!pending || pending.externalSessionId !== sessionId || pending.abandon) {
+      throw new Error('Etkin kayıt eşleşmedi; kapanış onayı saklanmadı.');
+    }
+    const stopped: PendingLifecycle = { ...pending, version: 2, completion: uninterruptedDrain ? 'confirmed' : 'unknown' };
+    await writeLifecycle(stopped);
+    if (!uninterruptedDrain) return false;
+    await finishPending(jwt, stopped);
+    return true;
+  });
+}
+
+export async function pendingRecording(jwt: string) {
+  const pending = await orderedLifecycle(() => readLifecycle(jwt));
+  return pending ? { meetingId: pending.meetingId, sessionId: pending.externalSessionId,
+    incomplete: pending.completion !== 'confirmed', abandoning: !!pending.abandon } : null;
+}
+
+export function abandonRecording(jwt: string, sessionId: string): Promise<void> {
+  return orderedLifecycle(async () => {
+    let pending = await readLifecycle(jwt);
+    if (!pending || pending.externalSessionId !== sessionId || activeLifecycleSession) throw new Error('Bekleyen kayıt eşleşmedi veya mikrofon hâlâ etkin.');
+    if (!pending.abandon) {
+      pending = { ...pending, version: 2, completion: 'unknown', abandon: {
+        endedAt: new Date(Math.max(Date.now(), Date.parse(pending.startedAt))).toISOString(), canonical: false } };
+      await writeLifecycle(pending); // Stable intent before any server write, including unknown response/restart.
+    }
+    const intent = pending.abandon!;
+    if (!intent.canonical) {
+      const result = await request(`/api/v1/admin/meetings/${pending.meetingId}/recording-lifecycle/abandon`, jwt,
+        { externalSessionId: pending.externalSessionId, startedAt: pending.startedAt, endedAt: intent.endedAt }, undefined, 'PUT');
+      if (!matchesLifecycle(result, pending, intent.endedAt) || result.recordingIncomplete !== true || result.transcriptStatus !== 'FAILED') {
+        throw new Error('Eksik kayıt kapanışı sunucuda doğrulanamadı.');
+      }
+      pending = { ...pending, abandon: { ...intent, canonical: true } };
+      await writeLifecycle(pending);
+    }
+    const response = await request(`/api/v1/audio-gateway/sessions/${encodeURIComponent(sessionId)}/abandon`, jwt,
+      {}, `${sessionId}:mobile-abandon`, undefined, true);
+    if (response !== ABSENT_GATEWAY_RECEIPT && (!response || response.sessionId !== sessionId || response.finalState !== 'ABANDONED'
+      || !Number.isSafeInteger(response.finishedAtMs) || (response.finishedAtMs as number) < Date.parse(pending.startedAt)
+      || typeof response.alreadyFinished !== 'boolean')) throw new Error('Ses oturumunun eksik kapanışı doğrulanamadı.');
+    if ((await bufferJournal.list()).some(row => row.ownerHash === pending!.ownerHash && row.sessionId === sessionId)) {
+      const { discardAbandonedBuffer } = await import('./encryptedChunkBuffer');
+      await discardAbandonedBuffer(pending.ownerHash, sessionId);
+    }
+    await clearLifecycle();
+  });
+}
+
 export function finish(jwt: string, sessionId: string): Promise<void> {
   return orderedLifecycle(async () => {
+    if (activeLifecycleSession) throw new Error('Etkin kayıt otomatik kapatılamaz.');
     const pending = await readLifecycle(jwt);
     if (!pending || pending.externalSessionId !== sessionId) throw new Error('Kayıt bağlantısı bulunamadı; kapanış doğrulanamadı.');
-    activeLifecycleSession = null;
     await finishPending(jwt, pending);
   });
 }

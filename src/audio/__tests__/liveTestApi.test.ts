@@ -1,4 +1,4 @@
-import { begin, createMeeting, finish, persistedResult } from '../liveTestApi';
+import { begin, completeCapture, captureStopped, abandonRecording, createMeeting, finish, persistedResult } from '../liveTestApi';
 import { mobileSession } from '../../auth/mobileSession';
 import * as SecureStore from 'expo-secure-store';
 import { createHash } from 'node:crypto';
@@ -10,7 +10,7 @@ const jwt = `e30.${Buffer.from(JSON.stringify(claims)).toString('base64url')}.si
 const ownerHash = createHash('sha256').update(JSON.stringify([claims.iss, claims.sub, claims.companyId, null])).digest('hex');
 const key = 'platform-mobile.platform-test.recording-lifecycle.v1';
 const startedAt = new Date(1789232900000).toISOString();
-const receipt = { ownerHash, meetingId, externalSessionId: 'SES-session-1', startedAt, endedAt: null };
+const receipt = { ownerHash, meetingId, externalSessionId: 'SES-session-1', startedAt, endedAt: null, version: 2, completion: 'confirmed' };
 const linked = { ...receipt, sessionId: requestId, meetingStatus: 'IN_PROGRESS', transcriptStatus: 'PENDING' };
 let stored: string | null = null;
 beforeEach(() => {
@@ -105,12 +105,12 @@ it('requests and verifies Speechmatics realtime before starting capture', async 
     expect(body.sttProvider).toBe('speechmatics');
     expect(fetchMock.mock.calls[2][0]).toBe(`https://testai.acik.com/api/v1/admin/meetings/${meetingId}/recording-lifecycle`);
     expect(fetchMock.mock.calls[2][1]?.method).toBe('PUT');
-    expect(JSON.parse(stored!)).toEqual(receipt);
+    expect(JSON.parse(stored!)).toEqual({ ...receipt, completion: 'unknown' });
     // A second capture must not silently close a live first one.
     await expect(begin(jwt, meetingId)).rejects.toThrow('Etkin kayıt');
     fetchMock.mockResolvedValueOnce({ ok: true, json: async () => finished } as Response)
       .mockResolvedValueOnce({ ok: true, json: async () => ({ ...linked, endedAt: new Date(finished.finishedAtMs).toISOString() }) } as Response);
-    await finish(jwt, 'SES-session-1');
+    await completeCapture(jwt, 'SES-session-1', true);
   } finally { fetchMock.mockRestore(); }
 });
 
@@ -303,4 +303,102 @@ it('preserves the receipt if device deletion fails after a valid canonical finis
   jest.spyOn(global, 'fetch').mockResolvedValue({ ok: true, json: async () => ({ ...linked, endedAt }) } as Response);
   await expect(finish(jwt, 'SES-session-1')).rejects.toThrow('Kayıt bağlantısı temizliği doğrulanamadı.');
   expect(JSON.parse(stored!)).toEqual({ ...receipt, endedAt });
+});
+
+const ok = (payload: unknown) => ({ ok: true, json: async () => payload } as Response);
+const canonicalAbandon = () => ({ ...linked, endedAt: JSON.parse(stored!).abandon.endedAt,
+  recordingIncomplete: true, transcriptStatus: 'FAILED' });
+const gatewayAbandon = { ...finished, finishedAtMs: Date.now(), finalState: 'ABANDONED' };
+
+it.each([undefined, 2])('never manufactures finish proof from an interrupted receipt v%s', async version => {
+  stored = JSON.stringify({ ...receipt, version, completion: version ? 'unknown' : undefined });
+  const fetchMock = jest.spyOn(global, 'fetch');
+  await expect(finish(jwt, receipt.externalSessionId)).rejects.toThrow('eksiksiz');
+  await expect(begin(jwt, meetingId)).rejects.toThrow('eksiksiz');
+  expect(fetchMock).not.toHaveBeenCalled(); expect(stored).not.toBeNull();
+});
+
+it('legacy endedAt only reconciles an exact already-ended canonical receipt without writes', async () => {
+  const endedAt = new Date(finished.finishedAtMs).toISOString();
+  stored = JSON.stringify({ ...receipt, version: undefined, completion: undefined, endedAt });
+  const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue(ok({ ...linked, endedAt, recordingIncomplete: false }));
+  await finish(jwt, receipt.externalSessionId);
+  expect(fetchMock).toHaveBeenCalledTimes(1);
+  expect(fetchMock.mock.calls[0][1]?.method).toBe('GET'); expect(stored).toBeNull();
+});
+
+it.each([{ endedAt: null }, { externalSessionId: 'SES-other' }, { recordingIncomplete: true }, { recordingIncomplete: undefined }])(
+  'legacy endedAt never authorizes a new canonical finish when reconciliation differs: %j', async difference => {
+    const endedAt = new Date(finished.finishedAtMs).toISOString();
+    stored = JSON.stringify({ ...receipt, version: undefined, completion: undefined, endedAt });
+    const fetchMock = jest.spyOn(global, 'fetch').mockResolvedValue(ok({ ...linked, endedAt, recordingIncomplete: false, ...difference }));
+    await expect(finish(jwt, receipt.externalSessionId)).rejects.toThrow('eşleşmedi');
+    expect(fetchMock).toHaveBeenCalledTimes(1); expect(fetchMock.mock.calls[0][1]?.method).toBe('GET');
+    expect(stored).not.toBeNull();
+  });
+
+it('stopped microphone remains stoppable through a storage read failure without manufacturing proof', async () => {
+  stored = null;
+  const fetchMock = jest.spyOn(global, 'fetch')
+    .mockResolvedValueOnce(ok({ meetingId, captureId: requestId, consentTextHash: 'sha256:test-hash' }))
+    .mockResolvedValueOnce(ok({ sessionId: receipt.externalSessionId, sessionStartMs: Date.parse(startedAt), sttProvider: 'speechmatics', transcriptionMode: 'realtime' }))
+    .mockResolvedValueOnce(ok(linked));
+  await begin(jwt, meetingId);
+  await expect(finish(jwt, receipt.externalSessionId)).rejects.toThrow('Etkin kayıt');
+  captureStopped(receipt.externalSessionId);
+  jest.mocked(SecureStore.getItemAsync).mockRejectedValueOnce(new Error('locked'));
+  await expect(completeCapture(jwt, receipt.externalSessionId, true)).rejects.toThrow('okunamadı');
+  expect(JSON.parse(stored!).completion).toBe('unknown');
+  fetchMock.mockImplementation(async path => String(path).endsWith('/recording-lifecycle/abandon') ? ok(canonicalAbandon()) : ok(gatewayAbandon));
+  await abandonRecording(jwt, receipt.externalSessionId);
+  expect(stored).toBeNull();
+});
+
+it('retains stable abandon intent after a lost canonical response and retries its exact time', async () => {
+  stored = JSON.stringify({ ...receipt, completion: 'unknown' });
+  const fetchMock = jest.spyOn(global, 'fetch').mockRejectedValueOnce(new Error('network'));
+  await expect(abandonRecording(jwt, receipt.externalSessionId)).rejects.toThrow('bilinmiyor');
+  const intent = JSON.parse(stored!).abandon;
+  expect(intent.canonical).toBe(false);
+  fetchMock.mockImplementation(async path => String(path).endsWith('/recording-lifecycle/abandon') ? ok(canonicalAbandon()) : ok(gatewayAbandon));
+  await abandonRecording(jwt, receipt.externalSessionId);
+  expect(fetchMock.mock.calls[0][1]?.body).toBe(fetchMock.mock.calls[1][1]?.body);
+  expect(stored).toBeNull();
+});
+
+it('canonical acknowledgement survives failed gateway cleanup; retry skips canonical write', async () => {
+  stored = JSON.stringify({ ...receipt, completion: 'unknown' });
+  const fetchMock = jest.spyOn(global, 'fetch').mockImplementationOnce(async () => ok(canonicalAbandon()))
+    .mockRejectedValueOnce(new Error('cleanup response lost'));
+  await expect(abandonRecording(jwt, receipt.externalSessionId)).rejects.toThrow('bilinmiyor');
+  expect(JSON.parse(stored!).abandon.canonical).toBe(true);
+  await expect(finish(jwt, receipt.externalSessionId)).rejects.toThrow('Eksik kayıt');
+  fetchMock.mockResolvedValueOnce(ok({ ...gatewayAbandon, alreadyFinished: true }));
+  await abandonRecording(jwt, receipt.externalSessionId);
+  expect(fetchMock.mock.calls.filter(([path]) => String(path).includes('recording-lifecycle'))).toHaveLength(1);
+  expect(fetchMock.mock.calls[1][1]?.headers).toEqual(fetchMock.mock.calls[2][1]?.headers);
+  expect(stored).toBeNull();
+});
+
+it.each(['AUDIO_GATEWAY_SESSION_NOT_FOUND', 'UNKNOWN'])('only explicit absent gateway receipt can finish cleanup: %s', async code => {
+  stored = JSON.stringify({ ...receipt, completion: 'unknown' });
+  const fetchMock = jest.spyOn(global, 'fetch').mockImplementationOnce(async () => ok(canonicalAbandon()))
+    .mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({ code }) } as Response);
+  if (code === 'UNKNOWN') { await expect(abandonRecording(jwt, receipt.externalSessionId)).rejects.toThrow(); expect(stored).not.toBeNull(); }
+  else { await abandonRecording(jwt, receipt.externalSessionId); expect(stored).toBeNull(); }
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+it('mismatched canonical abandon cannot clear local audio or reach gateway cleanup', async () => {
+  stored = JSON.stringify({ ...receipt, completion: 'unknown' });
+  const fetchMock = jest.spyOn(global, 'fetch').mockImplementation(async () => ok({ ...canonicalAbandon(), meetingId: requestId }));
+  await expect(abandonRecording(jwt, receipt.externalSessionId)).rejects.toThrow('doğrulanamadı');
+  expect(fetchMock).toHaveBeenCalledTimes(1); expect(JSON.parse(stored!).abandon.canonical).toBe(false);
+});
+
+it('a successful malformed gateway payload cannot impersonate the explicit not-found acknowledgement', async () => {
+  stored = JSON.stringify({ ...receipt, completion: 'unknown' });
+  jest.spyOn(global, 'fetch').mockImplementationOnce(async () => ok(canonicalAbandon())).mockResolvedValueOnce(ok({ absent: true }));
+  await expect(abandonRecording(jwt, receipt.externalSessionId)).rejects.toThrow('doğrulanamadı');
+  expect(JSON.parse(stored!).abandon.canonical).toBe(true);
 });

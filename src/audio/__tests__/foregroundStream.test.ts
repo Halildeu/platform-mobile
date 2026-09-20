@@ -200,3 +200,20 @@ test('kapandıktan sonra gelen olayları yok sayar', () => {
   event({ type: 'ready' }); event({ type: 'final', seq: 0, text: 'geç' });
   expect(ready).not.toHaveBeenCalled(); expect(text).not.toHaveBeenCalled();
 });
+
+test('a new bridge drained after reconnect cannot prove full recording completion', async () => {
+  const { first, second, client, emit } = recoverySetup();
+  emit(first, { type: 'ready' }); client.send(new ArrayBuffer(2), 16000, 1, 0);
+  emit(first, { type: 'audio_ack', chunk_seq: 0 });
+  first.onclose?.({ code: 1006 }); await jest.advanceTimersByTimeAsync(500);
+  emit(second, { type: 'ready' });
+  const stopping = client.stop(); emit(second, { type: 'drained' });
+  expect(await stopping).toBe(true); expect(client.completionConfirmed()).toBe(false);
+  expect(client.diagnostics().continuityLost).toBe(true);
+});
+test('an uninterrupted bridge can confirm completion only after drained', async () => {
+  const { client, event } = setup(new OfflineAudioBuffer()); event({ type: 'ready' });
+  expect(client.completionConfirmed()).toBe(false);
+  const stopping = client.stop(); event({ type: 'drained' });
+  expect(await stopping).toBe(true); expect(client.completionConfirmed()).toBe(true);
+});

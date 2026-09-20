@@ -28,7 +28,7 @@ jest.mock('../backgroundCapture', () => ({ supportsBackgroundCapture: () => fals
 jest.mock('expo-web-browser', () => ({ maybeCompleteAuthSession: jest.fn() }));
 jest.mock('../../auth/mobileSession', () => ({ mobileSession: { contentScope: () => 1, snapshot: () => null } }));
 jest.mock('../liveTestApi', () => ({
-  login: jest.fn(), meetings: jest.fn(), begin: jest.fn(), finish: jest.fn(), createMeeting: jest.fn(),
+  login: jest.fn(), meetings: jest.fn(), begin: jest.fn(), finish: jest.fn(), completeCapture: jest.fn(), captureStopped: jest.fn(), pendingRecording: jest.fn(async () => null), abandonRecording: jest.fn(), createMeeting: jest.fn(),
   restoreSession: jest.fn(), validSession: jest.fn(), logout: jest.fn(), persistedResult: jest.fn(), savedTranscript: jest.fn(),
   BASE_URL: 'https://example.test', CONSENT: 'Test onayı',
 }));
@@ -39,7 +39,7 @@ jest.mock('../foregroundStream', () => ({ ForegroundStream: jest.fn().mockImplem
     mockFailure = failure;
     mockReady = _ready;
     mockText = _text;
-    return { stop: mockDrain, dispose: jest.fn(), diagnostics: () => ({}) };
+    return { stop: mockDrain, dispose: jest.fn(), completionConfirmed: () => true, diagnostics: () => ({}) };
   }),
 }));
 
@@ -56,7 +56,7 @@ beforeEach(() => {
   jest.mocked(api.logout).mockResolvedValue(true);
   jest.mocked(api.meetings).mockResolvedValue([{ id: 'meeting-1', title: 'Test toplantısı' }]);
   jest.mocked(api.begin).mockResolvedValue('session-1');
-  jest.mocked(api.finish).mockResolvedValue(undefined);
+  jest.mocked(api.completeCapture).mockResolvedValue(true);
   Object.defineProperty(AppState, 'currentState', { configurable: true, value: 'active' });
 });
 afterEach(() => jest.restoreAllMocks());
@@ -110,16 +110,16 @@ it('keeps the connection failure visible after asynchronous cleanup', async () =
 it('does not show successful stop when finish validation fails after a drained stream', async () => {
   mockPermission.mockResolvedValue({ granted: true });
   mockDrain.mockResolvedValue(true);
-  jest.mocked(api.finish).mockRejectedValueOnce(new Error('Kayıt kapanışı doğrulanamadı.'));
+  jest.mocked(api.completeCapture).mockRejectedValueOnce(new Error('Kayıt kapanışı doğrulanamadı.'));
   const screen = await openAndStart();
   await waitFor(() => expect(api.begin).toHaveBeenCalled());
   await act(async () => { mockReady(); });
   await act(async () => { fireEvent.press(screen.getByText('Durdur')); });
   const stopAlert = jest.mocked(Alert.alert).mock.calls.at(-1);
   expect(stopAlert?.[0]).toBe('Kaydı bitir?');
-  expect(api.finish).not.toHaveBeenCalled();
+  expect(api.completeCapture).not.toHaveBeenCalled();
   await act(async () => { stopAlert?.[2]?.[1].onPress?.(); });
-  expect(api.finish).toHaveBeenCalledWith('test-only', 'session-1');
+  expect(api.completeCapture).toHaveBeenCalledWith('test-only', 'session-1', true);
   expect(screen.getByText('Test durdu; sunucudaki kapanış doğrulanamadı.')).toBeTruthy();
   expect(screen.queryByText('Test bitti. Ekrandaki metni konuşmanızla karşılaştırabilirsiniz.')).toBeNull();
   fireEvent.press(screen.getByText('Tanılama'));
@@ -136,7 +136,7 @@ it('keeps recording when stop confirmation is cancelled', async () => {
   await act(async () => { stopAlert?.[2]?.[0].onPress?.(); });
   expect(mockStop).not.toHaveBeenCalled();
   expect(mockDrain).not.toHaveBeenCalled();
-  expect(api.finish).not.toHaveBeenCalled();
+  expect(api.completeCapture).not.toHaveBeenCalled();
   expect(screen.getByText('● Mikrofon açık · Kayıt sürüyor')).toBeTruthy();
   await act(async () => { mockFailure('Kontrollü test kapanışı'); });
 });
@@ -246,7 +246,7 @@ it('does not misclassify an inactive system sheet as background or a user stop',
   expect(mockStop).not.toHaveBeenCalled();
   expect(screen.getByText('● Mikrofon açık · Kayıt sürüyor')).toBeTruthy();
   await act(async () => listener.mock.calls[0][1]('background'));
-  expect(api.finish).toHaveBeenCalledTimes(1);
+  expect(api.completeCapture).toHaveBeenCalledTimes(1);
   expect(screen.getByText('Uygulama arka plana geçtiği için test durduruldu.')).toBeTruthy();
 });
 
@@ -266,7 +266,7 @@ it('preserves a native interruption before start resolves and finishes the serve
     mockStream.isStreaming = false;
     mockStatusListener({ isStreaming: false, captureId: 'current-capture', reason: 'audio-interruption' });
   });
-  expect(api.finish).toHaveBeenCalledTimes(1);
+  expect(api.completeCapture).toHaveBeenCalledTimes(1);
   await act(async () => resolveStart());
   expect(screen.getByText(/iOS ses kaydını bir çağrı/)).toBeTruthy();
   expect(screen.queryByText('● Mikrofon açık · Kayıt sürüyor')).toBeNull();
@@ -284,13 +284,13 @@ it('ignores a delayed old native stop while the new capture is active', async ()
   await act(async () => mockReady());
   act(() => mockStatusListener({ isStreaming: false, captureId: 'previous-capture', reason: 'media-services-reset' }));
   expect(mockStop).not.toHaveBeenCalled();
-  expect(api.finish).not.toHaveBeenCalled();
+  expect(api.completeCapture).not.toHaveBeenCalled();
   expect(screen.getByText('● Mikrofon açık · Kayıt sürüyor')).toBeTruthy();
   await act(async () => {
     mockStream.isStreaming = false;
     mockStatusListener({ isStreaming: false, captureId: 'current-capture', reason: 'input-route-lost' });
   });
-  expect(api.finish).toHaveBeenCalledTimes(1);
+  expect(api.completeCapture).toHaveBeenCalledTimes(1);
   expect(screen.getByText(/Kullanılan mikrofon veya kulaklık bağlantısı kesildi/)).toBeTruthy();
 });
 
@@ -301,7 +301,7 @@ it('does not show microphone running if native start resolves after stopping wit
   await waitFor(() => expect(api.begin).toHaveBeenCalled());
   await act(async () => mockReady());
   expect(screen.queryByText('● Mikrofon açık · Kayıt sürüyor')).toBeNull();
-  expect(api.finish).toHaveBeenCalledTimes(1);
+  expect(api.completeCapture).toHaveBeenCalledTimes(1);
 });
 
 it('retains native reason when start resolves before the queued terminal event', async () => {
@@ -316,8 +316,21 @@ it('retains native reason when start resolves before the queued terminal event',
   const screen = await openAndStart();
   await waitFor(() => expect(api.begin).toHaveBeenCalled());
   await act(async () => mockReady());
-  expect(api.finish).toHaveBeenCalledTimes(1);
+  expect(api.completeCapture).toHaveBeenCalledTimes(1);
   expect(screen.getByText('iOS ses servisi yeniden başlatıldı; mikrofon durduruldu.')).toBeTruthy();
   await act(async () => mockStatusListener({ isStreaming: false, captureId: 'current-capture', reason: 'media-services-reset' }));
-  expect(api.finish).toHaveBeenCalledTimes(1);
+  expect(api.completeCapture).toHaveBeenCalledTimes(1);
+});
+
+it('incomplete stop records local stop and never waits for a final analysis', async () => {
+  mockPermission.mockResolvedValue({ granted: true });
+  const screen = await openAndStart(); await waitFor(() => expect(api.begin).toHaveBeenCalled());
+  await act(async () => { mockReady(); });
+  fireEvent.press(screen.getByText('Durdur'));
+  await act(async () => { jest.mocked(Alert.alert).mock.calls.at(-1)?.[2]?.[1].onPress?.(); });
+  expect(api.captureStopped).toHaveBeenCalledWith('session-1');
+  expect(api.completeCapture).toHaveBeenCalledWith('test-only', 'session-1', false);
+  expect(screen.getByText('Test durdu; son sözlerin tamamlandığı doğrulanamadı.')).toBeTruthy();
+  fireEvent.press(screen.getByText('Tanılama'));
+  expect(screen.queryByText(/Canlı analiz sonucu 20 saniyede gelmedi/)).toBeNull();
 });
