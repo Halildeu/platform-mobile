@@ -35,18 +35,18 @@ export class NativePushManager {
     });
   }
 
-  rotate(identity: PushIdentity, token: string): Promise<void> {
+  rotate(identity: PushIdentity, token: string, isCurrent: (receipt: PushReceipt) => boolean = () => true): Promise<void> {
     return this.ordered(async () => {
       const receipt = await this.io.read();
-      if (!receipt?.enabled || receipt.owner !== identity.owner) return;
+      if (!receipt?.enabled || receipt.owner !== identity.owner || !isCurrent(receipt)) return;
       await this.io.register(identity, receipt, token);
     });
   }
 
-  disable(identity: PushIdentity | null): Promise<boolean> {
+  disable(identity: PushIdentity | null, isCurrent: (receipt: PushReceipt) => boolean = () => true): Promise<boolean> {
     return this.ordered(async () => {
       const receipt = await this.io.read();
-      if (!receipt) return true;
+      if (!receipt || !isCurrent(receipt)) return true;
       // Stop automatic rotations before the network operation, including offline logout.
       await this.io.write({ ...receipt, enabled: false });
       if (!identity || receipt.owner !== identity.owner) return false;

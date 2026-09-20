@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Alert, AppState, Linking, Pressable, Text, View } from 'react-native';
 import * as Notifications from 'expo-notifications';
-import { disableNativePush, enableNativePush, nativePushConfiguration, refreshNativePush } from './nativePush';
+import { disableNativePush, enableNativePush, nativePushConfiguration, refreshNativePush, rotateNativePush } from './nativePush';
 
 export function NativePushSettings({ disabled }: { disabled: boolean }) {
   const [busy, setBusy] = useState(false);
@@ -14,7 +14,9 @@ export function NativePushSettings({ disabled }: { disabled: boolean }) {
     }); };
     refresh();
     const app = AppState.addEventListener('change', state => { if (state === 'active') refresh(); });
-    const token = Notifications.addPushTokenListener(refresh);
+    const token = Notifications.addPushTokenListener(device => { void rotateNativePush(device).catch(() => {
+      if (alive) setMessage('Bildirim kaydı yenilenemedi. Bağlantınızı kontrol edin.');
+    }); });
     return () => { alive = false; app.remove(); token.remove(); };
   }, []);
   async function change(enable: boolean) {
