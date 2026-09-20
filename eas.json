@@ -26,6 +26,8 @@
     },
     "development": {
       "channel": "development",
+      "environment": "development",
+      "env": { "MOBILE_OTA_ENABLED": "0" },
       "developmentClient": true,
       "distribution": "internal",
       "ios": {
@@ -34,6 +36,8 @@
     },
     "preview": {
       "channel": "preview",
+      "environment": "preview",
+      "env": { "MOBILE_OTA_ENABLED": "0" },
       "distribution": "internal",
       "ios": {
         "simulator": false
@@ -41,6 +45,9 @@
     },
     "production": {
       "channel": "production",
+      "environment": "production",
+      "distribution": "store",
+      "env": { "MOBILE_OTA_ENABLED": "0" },
       "autoIncrement": true,
       "ios": {
         "buildConfiguration": "Release"
@@ -51,15 +58,15 @@
     }
   },
   "submit": {
-    "production": {
+    "internal": {
       "ios": {
-        "appleId": "OPERATOR_APPLE_ID",
-        "ascAppId": "ASC_APP_ID",
-        "appleTeamId": "TEAM_ID"
+        "bundleIdentifier": "com.workcube.meeting"
       },
       "android": {
-        "serviceAccountKeyPath": "./play-store-credentials.json",
-        "track": "internal"
+        "applicationId": "com.workcube.meeting",
+        "track": "internal",
+        "releaseStatus": "completed",
+        "changesNotSentForReview": false
       }
     }
   }

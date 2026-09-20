@@ -64,11 +64,12 @@ npm test
 npm run test:e2e:ios
 npm run test:e2e:android
 
-# Production
-eas build --profile production
-eas submit -p ios
-eas submit -p android
+# Package / internal store submission
+# See docs/mobile-build-submit.md; separate manual workflows validate exact IDs.
 ```
+
+İmzalı paket üretimi ve TestFlight/Play iç test gönderimi:
+[paket ve dağıtım akışı](docs/mobile-build-submit.md).
 
 ## Faz 24 M6 Integration — 10 Slice
 
