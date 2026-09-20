@@ -1,0 +1,141 @@
+name: Detox native Android and iOS
+on:
+  pull_request:
+    paths: ['app/**', 'src/**', 'e2e/**', 'plugins/**', 'modules/**', 'app.json', 'app.config.js', 'package*.json', '.detoxrc.js', 'scripts/detox-*', '.github/workflows/mobile-detox.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: mobile-detox-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+env:
+  CI: '1'
+  EXPO_NO_TELEMETRY: '1'
+  MOBILE_DETOX_E2E: '1'
+jobs:
+  android-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: android-actions/setup-android@v3
+        with: { packages: platform-tools }
+      - run: npm ci
+      - run: node --test scripts/detox-native.test.cjs
+      - run: npx expo prebuild --platform android --no-install
+      - name: Build application and actual instrumentation APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/detox
+          cd android
+          ./gradlew :app:assembleRelease :app:assembleReleaseAndroidTest -PreactNativeArchitectures=x86_64 '-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=1536m -Dfile.encoding=UTF-8' -Dorg.gradle.parallel=false --no-daemon --max-workers=1 2>&1 | tee ../artifacts/detox/build.log
+      - run: node scripts/detox-artifacts.cjs seal android "$(git rev-parse HEAD)"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: detox-android-packages-${{ github.sha }}
+          path: |
+            artifacts/detox/
+            android/app/build/outputs/apk/release/app-release.apk
+            android/app/build/outputs/apk/androidTest/release/app-release-androidTest.apk
+          retention-days: 7
+          if-no-files-found: error
+  android-test:
+    needs: android-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm }
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: '17' }
+      - uses: android-actions/setup-android@v3
+        with: { packages: platform-tools }
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with: { name: 'detox-android-packages-${{ github.sha }}', path: . }
+      - name: Enable emulator acceleration
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 35
+          arch: x86_64
+          target: default
+          disable-animations: true
+          script: bash scripts/detox-android-run.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: detox-android-result-${{ github.sha }}
+          path: artifacts/detox/
+          retention-days: 7
+          if-no-files-found: error
+  ios-test:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm }
+      - name: Install pinned iOS simulator utility
+        shell: bash
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/detox
+          brew tap wix/brew
+          tap_root="$(brew --repository wix/brew)"
+          git -C "$tap_root" fetch --depth=1 origin 8f636f84541e08e850f455d7cffdfbd7ba305d3f
+          git -C "$tap_root" checkout --detach 8f636f84541e08e850f455d7cffdfbd7ba305d3f
+          brew install --build-from-source wix/brew/applesimutils
+          command -v applesimutils
+          applesimutils --version | tee artifacts/detox/applesimutils-version.txt
+          grep -Eq '(^|[^0-9])0\.9\.12([^0-9]|$)' artifacts/detox/applesimutils-version.txt
+      - run: npm ci
+      - run: node --test scripts/detox-native.test.cjs
+      - name: Record toolchain and select installed simulator
+        run: |
+          mkdir -p artifacts/detox
+          xcodebuild -version | tee artifacts/detox/xcode.txt
+          xcrun swift --version | tee artifacts/detox/swift.txt
+          node scripts/detox-ios-device.cjs
+      - run: npx expo prebuild --platform ios --no-install
+      - run: pod install
+        working-directory: ios
+      - name: Build actual simulator app
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcodebuild -workspace ios/WorkcubeMeeting.xcworkspace -scheme WorkcubeMeeting -configuration Release -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -derivedDataPath ios/build -resultBundlePath artifacts/detox/compile.xcresult CODE_SIGNING_ALLOWED=NO build 2>&1 | tee artifacts/detox/build.log
+          node scripts/detox-artifacts.cjs seal ios "$(git rev-parse HEAD)"
+          tar -czf artifacts/detox/WorkcubeMeeting.app.tgz -C ios/build/Build/Products/Release-iphonesimulator WorkcubeMeeting.app
+      - name: Prepare Detox simulator framework
+        run: npx detox build-framework-cache
+      - name: Run native iOS assertions
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/detox-artifacts.cjs verify ios "$(git rev-parse HEAD)"
+          npx detox test --configuration ios.sim.release --record-logs all --take-screenshots all --artifacts-location artifacts/detox/ui 2>&1 | tee artifacts/detox/detox.log
+          node scripts/detox-artifacts.cjs results
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: detox-ios-result-${{ github.sha }}
+          path: |
+            artifacts/detox/
+            ios/Podfile.lock
+          retention-days: 7
+          if-no-files-found: error
