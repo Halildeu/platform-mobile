@@ -4,6 +4,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { setTimeout, clearTimeout } from "node:timers";
 import { monitorTransport } from "./e2e-maestro-transport.mjs";
+import { collectEmulatorHealth } from "./e2e-maestro-emulator.mjs";
 
 const runId = process.env.GITHUB_RUN_ID;
 const attempt = process.env.GITHUB_RUN_ATTEMPT;
@@ -13,7 +14,18 @@ const flowPaths = {
   "app-launch": ".maestro/flows/01-app-launch.yaml",
   "transcript-demo": ".maestro/flows/02-transcript-demo.yaml",
 };
-assert.ok(flow === undefined || Object.hasOwn(flowPaths, flow), "Unknown Maestro flow");
+assert.ok(
+  flow === undefined || Object.hasOwn(flowPaths, flow),
+  "Unknown Maestro flow",
+);
+const collectHealth = process.env.MAESTRO_SYNTHETIC_EMULATOR === "1";
+if (collectHealth) {
+  assert.equal(process.env.GITHUB_ACTIONS, "true");
+  assert.ok(
+    Object.hasOwn(flowPaths, flow),
+    "System diagnostics require an isolated synthetic flow",
+  );
+}
 assert.match(runId ?? "", /^\d+$/);
 assert.match(attempt ?? "", /^[1-9]\d*$/);
 assert.match(commit ?? "", /^[a-f0-9]{40}$/);
@@ -81,47 +93,10 @@ function execute(name, command, args, timeout) {
 }
 
 snapshot("before-install");
-// This synthetic emulator suite does not exercise SMS. The preinstalled Google
-// Messages app produced an ANR dialog over both tested screens (run 35225726786,
-// attempt 2). Disable only that unrelated app, never dismiss our app's errors.
-const messaging = spawnSync(
-  "adb",
-  [
-    "-s",
-    "emulator-5554",
-    "shell",
-    "pm",
-    "list",
-    "packages",
-    "com.google.android.apps.messaging",
-  ],
-  {
-    encoding: "utf8",
-    timeout: 10000,
-  },
-);
-let status = messaging.status ?? 1;
-if (
-  status === 0 &&
-  messaging.stdout
-    .split(/\r?\n/)
-    .includes("package:com.google.android.apps.messaging")
-) {
-  status = execute(
-    "disable-unrelated-emulator-messages",
-    "adb",
-    [
-      "-s",
-      "emulator-5554",
-      "shell",
-      "pm",
-      "disable-user",
-      "--user",
-      "0",
-      "com.google.android.apps.messaging",
-    ],
-    10000,
-  );
+let status = 0;
+if (collectHealth) {
+  evidence.emulator = [collectEmulatorHealth("before-install", directory)];
+  if (!evidence.emulator[0].healthy) status = 1;
 }
 if (status === 0)
   status = execute(
@@ -173,6 +148,11 @@ if (status === 0) {
   // Missing diagnostics must not turn an unexplained flaky run into acceptance.
   if (status === 0 && !evidence.transport.complete) status = 1;
   snapshot("after-maestro");
+}
+if (collectHealth) {
+  const health = collectEmulatorHealth("after-test", directory);
+  evidence.emulator.push(health);
+  if (status === 0 && !health.healthy) status = 1;
 }
 evidence.exitCode = status;
 writeFileSync(

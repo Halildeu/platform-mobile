@@ -1,5 +1,44 @@
 # platform-mobile E2E strategy — Faz 24 M6
 
+## 2026-09-18 Pixel Launcher ANR and environment correction
+
+Run 35344006973 completed with transcript-demo 1/1 passing and app-launch failing
+its unchanged app-root assertion after 30 seconds. The failure screenshot and
+accessibility hierarchy show a Pixel Launcher ANR dialog, not an application
+crash. Android logged Workcube's Activity displayed at 12:47:31.763Z and React
+Native main started at 12:47:32.503Z. Transport stayed device with zero dropped
+diagnostic events. Only the system dialog/status bar appeared in the hierarchy.
+
+The available logcat begins at 12:47:17.519Z and contains no originating ANR
+stack. Google package initialization/download activity is visible, but CPU
+starvation or an upstream launcher defect is not established. Two CPU cores
+and automatically raised 2560 MB guest RAM are observations, not proven causes.
+The verified failure mechanism is a system modal blocking app accessibility.
+
+For these Google-independent synthetic tests, use Android 35 default/AOSP x86_64
+instead of google_apis. Google's SDK catalogue provides
+system-images;android-35;default;x86_64 (revision 2 at investigation time).
+Remove the earlier Messages-disable workaround rather than accumulating package
+exclusions. Do not dismiss ANRs, disable the launcher, extend assertion deadlines
+or retry failed flows. Native FCM/Google Play and physical-device acceptance
+remain separate and cannot be inferred from an AOSP pass.
+
+The opt-in synthetic CI collector now saves bounded system/events/crash logs,
+last-ANR traces, window state and memory before Maestro and after the test, plus
+host resource counters and probe outcomes. Each adb probe has a 5-second deadline
+and 512 KiB bound. Collection requires GitHub Actions, an allowlisted synthetic
+flow and emulator identity. It is not enabled for phones or authenticated flows.
+Unavailable readiness probes or a focused system error dialog fail the run;
+postflight preserves the original test failure. Test assertions, APK identity
+verification, separate JUnit reports and three success screenshots remain required.
+
+This is an environment correction pending native CI verification, not a claim
+that the unknown internal Pixel Launcher defect has been repaired.
+
+References: [Android AVD configuration](https://developer.android.com/studio/run/managing-avds),
+[ANR diagnosis](https://developer.android.com/topic/performance/anrs/diagnose-and-fix-anrs),
+[SDK catalogue](https://dl.google.com/android/repository/sys-img/android/sys-img2-4.xml).
+
 ## 2026-09-18 Android flow isolation
 
 Current Android CI builds a real x86_64 APK and runs both existing Maestro flows.

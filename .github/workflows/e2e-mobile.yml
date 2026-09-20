@@ -124,6 +124,7 @@ jobs:
       CI: "1"
       MAESTRO_CLI_NO_ANALYTICS: "1"
       MAESTRO_FLOW: ${{ matrix.flow }}
+      MAESTRO_SYNTHETIC_EMULATOR: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -166,7 +167,10 @@ jobs:
         with:
           api-level: 35
           arch: x86_64
-          target: google_apis
+          # These two unauthenticated UI flows have no Google/FCM dependency.
+          # Run35344006973's Pixel Launcher ANR obscured the app. Use AOSP
+          # instead of disabling unrelated Google packages one by one.
+          target: default
           disable-animations: true
           script: node scripts/e2e-maestro.mjs
       - name: Require selected flow screenshots

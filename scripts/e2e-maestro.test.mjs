@@ -35,11 +35,19 @@ if (args.includes('track-devices')) {
   }, 30);
   setInterval(() => {}, 1000);
 }
-if (args.includes('packages')) { if (process.env.PACKAGE_PROBE_EXIT) process.exit(9); if (process.env.MESSAGES) console.log('package:com.google.android.apps.messaging'); }
 if (args.includes('disable-user')) { require('node:fs').writeFileSync('disabled.json', JSON.stringify(args)); process.exit(Number(process.env.DISABLE_EXIT || 0)); }
 if (args.includes('install')) process.exit(Number(process.env.INSTALL_EXIT || 0));
 if (args.includes('get-state')) console.log(process.env.STATE || 'device');
-if (args.includes('getprop')) console.log('1');
+if (args.includes('getprop')) console.log(args.includes('ro.kernel.qemu') ? process.env.QEMU || '1' : '1');
+if (args.includes('path')) { if (process.env.PACKAGE_PROBE_EXIT) process.exit(9); console.log('package:/system/framework/framework-res.apk'); }
+if (args.includes('displays')) {
+  const post = require('node:fs').existsSync('invoked.json');
+  if (process.env.WINDOW_PROBE_EXIT || (post && process.env.POST_PROBE_EXIT)) process.exit(9);
+  const error = process.env.ERROR_DIALOG || (post && process.env.POST_DIALOG);
+  console.log('mCurrentFocus=Window{123 u0 ' + (error ? 'Application Not Responding: com.android.launcher3' : 'com.android.launcher3/.Launcher') + '}');
+}
+if (args.includes('lastanr')) console.log('SYNTHETIC_ANR_TRACE');
+if (args.includes('logcat')) console.log(process.env.LOG_OVERSIZE ? 'x'.repeat(2 * 1024 * 1024) : 'SYNTHETIC_BOOT_LOG');
 `,
     { mode: 0o755 },
   );
@@ -238,23 +246,104 @@ test("missing Maestro closes the monitor and preserves executable error", (t) =>
   assert.equal(result.transport.tracker.stoppedByRunner, true);
 });
 
-test("disables only unrelated Messages and preserves successful flows", (t) => {
+const synthetic = {
+  GITHUB_ACTIONS: "true",
+  MAESTRO_SYNTHETIC_EMULATOR: "1",
+  MAESTRO_FLOW: "app-launch",
+};
+
+test("AOSP preflight captures pre-Maestro logs without disabling packages", (t) => {
   const f = fixture(t);
-  assert.equal(run(f, { MESSAGES: "1" }).status, 0);
-  const args = JSON.parse(readFileSync(join(f.cwd, "disabled.json")));
-  assert.equal(args.at(-1), "com.google.android.apps.messaging");
+  assert.equal(run(f, synthetic).status, 0);
+  assert.equal(existsSync(join(f.cwd, "disabled.json")), false);
+  assert.deepEqual(
+    evidence(f).emulator.map((h) => h.healthy),
+    [true, true],
+  );
+  assert.match(
+    readFileSync(
+      join(f.cwd, "artifacts/maestro/emulator-before-install-system-log.txt"),
+      "utf8",
+    ),
+    /SYNTHETIC_BOOT_LOG/,
+  );
+  assert.match(
+    readFileSync(
+      join(f.cwd, "artifacts/maestro/emulator-after-test-last-anr.txt"),
+      "utf8",
+    ),
+    /SYNTHETIC_ANR_TRACE/,
+  );
   assert.equal(evidence(f).exitCode, 0);
   assert.ok(existsSync(join(f.cwd, "invoked.json")));
 });
 
-test("failed emulator preparation preserves evidence and never runs flows", (t) => {
+test("unhealthy emulator or focused ANR fails before Maestro and retains postflight", (t) => {
   for (const env of [
     { PACKAGE_PROBE_EXIT: "1" },
-    { MESSAGES: "1", DISABLE_EXIT: "7" },
+    { WINDOW_PROBE_EXIT: "1" },
+    { STATE: "offline" },
+    { ERROR_DIALOG: "1" },
   ]) {
     const f = fixture(t);
-    assert.notEqual(run(f, env).status, 0);
+    assert.notEqual(run(f, { ...synthetic, ...env }).status, 0);
     assert.notEqual(evidence(f).exitCode, 0);
+    assert.equal(evidence(f).emulator.length, 2);
+    assert.equal(evidence(f).emulator[0].healthy, false);
     assert.equal(existsSync(join(f.cwd, "invoked.json")), false);
   }
+});
+
+test("postflight health cannot hide a flow failure or turn a later ANR green", (t) => {
+  for (const env of [{ POST_DIALOG: "1" }, { POST_PROBE_EXIT: "1" }]) {
+    const f = fixture(t);
+    assert.equal(run(f, { ...synthetic, ...env }).status, 1);
+    assert.equal(evidence(f).emulator[0].healthy, true);
+    assert.equal(evidence(f).emulator[1].healthy, false);
+    assert.ok(existsSync(join(f.cwd, "invoked.json")));
+  }
+  const f = fixture(t);
+  assert.equal(
+    run(f, { ...synthetic, MAESTRO_EXIT: "3", POST_DIALOG: "1" }).status,
+    3,
+  );
+  assert.equal(evidence(f).exitCode, 3);
+});
+
+test("system capture refuses non-CI, unscoped flows and non-emulator transports", (t) => {
+  for (const env of [
+    { GITHUB_ACTIONS: "false" },
+    { MAESTRO_FLOW: "live-test" },
+  ]) {
+    const f = fixture(t);
+    assert.notEqual(run(f, { ...synthetic, ...env }).status, 0);
+    assert.equal(existsSync(join(f.cwd, "artifacts")), false);
+  }
+  const f = fixture(t);
+  assert.equal(run(f, { ...synthetic, QEMU: "0" }).status, 1);
+  assert.equal(
+    existsSync(
+      join(f.cwd, "artifacts/maestro/emulator-before-install-system-log.txt"),
+    ),
+    false,
+  );
+  assert.equal(existsSync(join(f.cwd, "invoked.json")), false);
+});
+
+test("oversized system log is bounded and cannot produce healthy acceptance", (t) => {
+  const f = fixture(t);
+  assert.equal(run(f, { ...synthetic, LOG_OVERSIZE: "1" }).status, 1);
+  const result = evidence(f).emulator[0];
+  assert.equal(result.healthy, false);
+  assert.equal(
+    result.probes.find((p) => p.name === "system-log").truncated,
+    true,
+  );
+  assert.ok(
+    readFileSync(
+      join(f.cwd, "artifacts/maestro/emulator-before-install-system-log.txt"),
+    ).length <=
+      512 * 1024,
+  );
+  assert.equal(existsSync(join(f.cwd, "invoked.json")), false);
 });
