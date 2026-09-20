@@ -7,6 +7,7 @@ import { SessionExpired } from '../auth/sessionManager';
 import { parsePersistedResult } from '../analysis/persistedResult';
 import { parseSavedTranscript } from '../analysis/savedTranscript';
 import { disableNativePush } from '../notifications/nativePush';
+import { resultExporter } from '../analysis/nativeResultExport';
 
 export const BASE_URL = 'https://testai.acik.com';
 const ISSUER = `${BASE_URL}/realms/platform-test`;
@@ -96,6 +97,8 @@ export async function restoreSession() {
   return value ? { jwt: value.jwt, expiresAt: value.expiresAt } : null;
 }
 export async function logout(): Promise<boolean> {
+  // Invalidates in-flight exports before remote revocation. Failed cleanup is retried by the cache sweep.
+  await resultExporter.cleanup(true).catch(() => {});
   const pushCleared = await disableNativePush().catch(() => false);
   const sessionCleared = await mobileSession.logout();
   return pushCleared && sessionCleared;

@@ -3,6 +3,9 @@ import { PersistedResultPanel } from '../PersistedResultPanel';
 import type { PersistedResult } from '../persistedResult';
 import { Share } from 'react-native';
 import { printAsync } from 'expo-print';
+import { resultExporter } from '../nativeResultExport';
+jest.mock('../../auth/mobileSession', () => ({ mobileSession: { contentScope: () => 1 } }));
+jest.mock('../nativeResultExport', () => ({ resultExporter: { copy: jest.fn().mockResolvedValue(undefined), pdf: jest.fn().mockResolvedValue(undefined) } }));
 jest.mock('expo-print', () => ({ printAsync: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('../../audio/liveTestApi', () => ({ persistedResult: jest.fn() }));
 const result = (meetingId: string): PersistedResult => ({ meetingId, analysisRunId: 'run', sessionId: 'SES-1', generatedAt: '2026-09-10',
@@ -17,7 +20,11 @@ test('exports the loaded saved result without inventing a live version', async (
   expect(message).toContain('Kaydedilmiş toplantı sonucu');
   expect(message).toContain('Kalıcı özet');
   expect(message).not.toContain('Sürüm:');
-  await act(async () => fireEvent.press(screen.getByText('Kaydedilmiş sonucu PDF / Yazdır')));
+  await act(async () => fireEvent.press(screen.getByText('Kaydedilmiş sonucu PDF olarak paylaş')));
+  expect(resultExporter.pdf).toHaveBeenCalledWith(expect.stringContaining('Kaydedilmiş toplantı sonucu'), expect.any(Function));
+  await act(async () => fireEvent.press(screen.getByText('Kaydedilmiş sonucun tamamını kopyala')));
+  expect(resultExporter.copy).toHaveBeenCalledWith(message, expect.any(Function));
+  await act(async () => fireEvent.press(screen.getByText('Kaydedilmiş sonucu yazdır')));
   expect(printAsync).toHaveBeenCalledWith({ html: expect.stringContaining('Kaydedilmiş toplantı sonucu') });
   share.mockRestore();
 });

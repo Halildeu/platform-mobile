@@ -1,6 +1,7 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useMeetingNotifications } from '../src/notifications/useMeetingNotifications';
+import { useExportCacheCleanup } from '../src/analysis/useResultExport';
 
 import '../src/i18n'; // i18next global örneğini başlatır (Türkçe varsayılan)
 
@@ -12,6 +13,7 @@ import '../src/i18n'; // i18next global örneğini başlatır (Türkçe varsayı
  */
 export default function RootLayout() {
   useMeetingNotifications();
+  useExportCacheCleanup();
   return (
     <>
       <StatusBar style="light" />

@@ -5,6 +5,8 @@ import { analysisHtml } from './exportHtml';
 import { analysisMarkdown } from './exportMarkdown';
 import { persistedResult } from '../audio/liveTestApi';
 import type { PersistedResult } from './persistedResult';
+import { mobileSession } from '../auth/mobileSession';
+import { useResultExport } from './useResultExport';
 
 
 type Props = {
@@ -23,6 +25,8 @@ function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic }: P
   const exporting = useRef(false);
   const lifecycle = useRef({ generation: 0 });
   const pending = useRef(false);
+  const [scope, setScope] = useState<number | null>(null);
+  const exports = useResultExport(scope);
   // The keyed meeting mounts once; diagnostic callback updates must not reload it.
   const restoreOnMount = useEffectEvent(() => { void refresh(); });
   useEffect(() => { restoreOnMount(); }, []);
@@ -34,23 +38,25 @@ function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic }: P
     if (pending.current) return;
     pending.current = true; setBusy(true); setError('');
     const run = lifecycle.current.generation;
+    const owner = mobileSession.contentScope();
     onDiagnostic?.(`Kalıcı sonuç okuma isteği başlatıldı; toplantı=${meetingId}`);
     try {
       const next = await load(meetingId);
       if (run !== lifecycle.current.generation) return;
+      if (owner === null || owner !== mobileSession.contentScope()) throw new Error('Oturum değişti; sonucu yeniden açın.');
       if (next.meetingId !== meetingId) throw new Error('Sonuç seçilen toplantıyla eşleşmiyor.');
-      setResult(next);
+      setResult(next); setScope(owner);
       onDiagnostic?.('Kalıcı sonuç alındı ve toplantı eşleşmesi doğrulandı');
     } catch (e) {
       if (run === lifecycle.current.generation) {
-        setResult(null); setSources(false);
+        setResult(null); setScope(null); setSources(false);
         const message = e instanceof Error ? e.message : 'Kalıcı sonuç okunamadı.';
         setError(message); onDiagnostic?.(message);
       }
     } finally { if (run === lifecycle.current.generation) { pending.current = false; setBusy(false); } }
   }
   async function exportResult(format: 'markdown' | 'pdf') {
-    if (!result || busy || exporting.current) return;
+    if (!result || busy || exporting.current || scope === null || mobileSession.contentScope() !== scope) return;
     exporting.current = true; setSharing(true); setShareError('');
     try {
       if (format === 'pdf') await printAsync({ html: analysisHtml(result) });
@@ -62,7 +68,7 @@ function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic }: P
     <Text style={styles.title}>Kaydedilmiş toplantı sonucu</Text>
     <Text style={styles.text}>Toplantının sunucuda saklanan en son analizidir; son kayıt denemenizden önceki bir oturuma ait olabilir.</Text>
     <Text style={styles.text}>Kayıt durduktan sonra kalıcı sonucun hazırlanması birkaç dakika sürebilir. Canlı taslak, kaydedilmiş sonuç değildir.</Text>
-    <Pressable accessibilityRole="button" disabled={busy} onPress={() => void refresh()}>
+    <Pressable accessibilityRole="button" disabled={busy || exports.working || sharing} onPress={() => void refresh()}>
       <Text style={styles.link}>{busy ? 'Sonuç okunuyor…' : 'Kalıcı sonucu aç / yenile'}</Text>
     </Pressable>
     {!!error && <Text accessibilityRole="alert" style={styles.text}>{error}</Text>}
@@ -84,12 +90,19 @@ function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic }: P
         <Text style={styles.title}>{s.claim}</Text><Text selectable style={styles.text}>{s.text}</Text>
         <Text style={styles.text}>Kaynak {i + 1}</Text>
       </View>) : <Text style={styles.text}>Bu sonuçta kaynak alıntısı bulunmuyor.</Text>)}
-      <Pressable accessibilityRole="button" disabled={busy || sharing} onPress={() => void exportResult('markdown')}>
+      <Pressable accessibilityRole="button" disabled={busy || sharing || exports.working} onPress={() => void exports.copy(analysisMarkdown(result))}>
+        <Text style={styles.link}>Kaydedilmiş sonucun tamamını kopyala</Text>
+      </Pressable>
+      <Pressable accessibilityRole="button" disabled={busy || sharing || exports.working} onPress={() => void exportResult('markdown')}>
         <Text style={styles.link}>Kaydedilmiş sonucu Markdown olarak paylaş</Text>
       </Pressable>
-      <Pressable accessibilityRole="button" disabled={busy || sharing} onPress={() => void exportResult('pdf')}>
-        <Text style={styles.link}>Kaydedilmiş sonucu PDF / Yazdır</Text>
+      <Pressable accessibilityRole="button" disabled={busy || sharing || exports.working} onPress={() => void exports.pdf(analysisHtml(result))}>
+        <Text style={styles.link}>Kaydedilmiş sonucu PDF olarak paylaş</Text>
       </Pressable>
+      <Pressable accessibilityRole="button" disabled={busy || sharing || exports.working} onPress={() => void exportResult('pdf')}>
+        <Text style={styles.link}>Kaydedilmiş sonucu yazdır</Text>
+      </Pressable>
+      {!!exports.message && <Text accessibilityRole="alert" style={styles.text}>{exports.message}</Text>}
       {!!shareError && <Text accessibilityRole="alert" style={styles.text}>{shareError}</Text>}
     </>}
   </View>;
