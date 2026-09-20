@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
-import { FlatList, Pressable, Text, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { Pressable, Text, View } from 'react-native';
 import { persistedResult, savedTranscript } from '../audio/liveTestApi';
 import { mobileSession } from '../auth/mobileSession';
 import { useResultExport } from './useResultExport';
 import { transcriptHtml } from './exportHtml';
-import { savedTranscriptRows, type SavedTranscriptDocument } from './savedTranscript';
+import { type SavedTranscriptDocument } from './savedTranscript';
+import { SavedSpeakerTranscript } from './SavedSpeakerTranscript';
 
 async function loadTranscript(meetingId: string) {
   const result = await persistedResult(meetingId);
@@ -33,7 +34,6 @@ function TranscriptForMeeting({ meetingId, load = loadTranscript }: Props) {
       .catch(() => { if (current) setError(true); });
     return () => { current = false; };
   }, [meetingId, load, attempt]);
-  const paragraphs = useMemo(() => document ? savedTranscriptRows(document) : [], [document]);
   return <View style={{ flex: 1 }}>
     {!error && text === null && <Text style={{ color: '#94a3b8' }}>Kaydedilmiş konuşma metni yükleniyor…</Text>}
     {error && <>
@@ -52,16 +52,7 @@ function TranscriptForMeeting({ meetingId, load = loadTranscript }: Props) {
       </Pressable>
     </>}
     {!!exports.message && <Text accessibilityRole="alert" style={{ color: '#e2e8f0' }}>{exports.message}</Text>}
-    {paragraphs.some(item => item.speaker !== undefined) && <Text style={{ color: '#94a3b8' }}>
-      Konuşmacı numaraları bu kayıt içindir; kişi kimliği değildir.
-    </Text>}
-    {text !== null && <FlatList data={paragraphs} keyExtractor={(_, index) => String(index)}
-      initialNumToRender={4} windowSize={5}
-      renderItem={({ item }) => <View>
-        {item.speaker !== undefined && <Text style={{ color: '#93c5fd' }}>
-          {item.speaker === 'unknown' ? 'Konuşmacı bilinmiyor' : `Konuşmacı ${item.speaker}`}
-        </Text>}
-        <Text selectable style={{ color: '#e2e8f0', fontSize: 16 }}>{item.text}</Text>
-      </View>} />}
+    {document && <SavedSpeakerTranscript key={document.analysisRunId + ':' + scope + ':' + attempt}
+      document={document} owner={scope} />}
   </View>;
 }

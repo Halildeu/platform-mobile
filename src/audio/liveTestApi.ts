@@ -6,6 +6,7 @@ import { mobileSession } from '../auth/mobileSession';
 import { SessionExpired } from '../auth/sessionManager';
 import { parsePersistedResult } from '../analysis/persistedResult';
 import { parseSavedTranscript, type SavedTranscriptDocument } from '../analysis/savedTranscript';
+import { parseSpeakerLabels, validSpeakerDocument, type SpeakerLabelEdit } from '../analysis/speakerLabels';
 import { disableNativePush } from '../notifications/nativePush';
 import { resultExporter } from '../analysis/nativeResultExport';
 import { bufferJournal } from './nativeBufferJournal';
@@ -183,7 +184,8 @@ async function request(path: string, jwt: string, body?: object, key?: string, m
     : path.startsWith('/api/v1/admin/meetings?') ? 'Toplantı listesi'
       : path.endsWith('/consents') ? 'Kayıt onayı'
         : path.endsWith('/finish') ? 'Kayıt kapanışı'
-          : path.endsWith('/intelligence/result') ? 'Kalıcı toplantı sonucu'
+          : path.endsWith('/speaker-labels') ? 'Konuşmacı adı'
+            : path.endsWith('/intelligence/result') ? 'Kalıcı toplantı sonucu'
             : path.endsWith('/recording-lifecycle') ? 'Toplantı kayıt bağlantısı' : 'Ses oturumu';
   const timer = setTimeout(() => controller.abort(), 15000);
   try {
@@ -229,6 +231,19 @@ export async function persistedResult(meetingId: string) {
     if (pending?.meetingId === meetingId && pending.endedAt !== null && !pending.abandon) await finishPending(session.jwt, pending);
   });
   return parsePersistedResult(await request(`/api/v1/admin/meetings/${meetingId}/intelligence/result`, session.jwt), meetingId);
+}
+export async function savedSpeakerLabels(document: SavedTranscriptDocument, owner: number, edit?: SpeakerLabelEdit) {
+  if (!validSpeakerDocument(document) || mobileSession.contentScope() !== owner) throw new Error('Konuşmacı kaydı değişti.');
+  const session = await validSession(30000);
+  if (mobileSession.contentScope() !== owner) throw new Error('Oturum değişti.');
+  const response = await request(`/api/v1/admin/meetings/${document.meetingId}/intelligence/results/${document.analysisRunId}/transcript/speaker-labels`,
+    session.jwt, edit, undefined, edit ? 'PUT' : undefined);
+  if (mobileSession.contentScope() !== owner) throw new Error('Oturum değişti.');
+  const result = parseSpeakerLabels(response, document);
+  if (edit && (result.revision !== edit.expectedRevision + 1
+    || (result.labels.find(label => label.scope === edit.scope && label.speaker === edit.speaker)?.name ?? null) !== edit.name))
+    throw new Error('Konuşmacı adı kaydı doğrulanamadı.');
+  return result;
 }
 export async function createMeeting(jwt: string, title: string): Promise<Meeting> {
   const cleaned = title.trim();
