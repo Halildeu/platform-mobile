@@ -10,12 +10,13 @@ concurrency:
   cancel-in-progress: true
 jobs:
   compile:
-    runs-on: macos-15
+    # ExpoModulesJSI 57.0.8 uses foreign-reference constructor annotations introduced in Xcode 27.
+    runs-on: xcode-27
     timeout-minutes: 60
     env:
       CI: '1'
       EXPO_NO_TELEMETRY: '1'
-      DEVELOPER_DIR: /Applications/Xcode_26.2.app/Contents/Developer
+      DEVELOPER_DIR: /Applications/Xcode_27.0.app/Contents/Developer
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -32,7 +33,9 @@ jobs:
           mkdir -p artifacts/ios
           test -d "$DEVELOPER_DIR"
           xcodebuild -version | tee artifacts/ios/xcode-version.txt
-          grep -Fx 'Xcode 26.2' artifacts/ios/xcode-version.txt
+          grep -Eq '^Xcode 27(\.[0-9]+)*$' artifacts/ios/xcode-version.txt
+          sw_vers | tee artifacts/ios/macos-version.txt
+          node -e 'require("fs").writeFileSync("artifacts/ios/runner-image.json", JSON.stringify({ image: process.env.ImageOS, version: process.env.ImageVersion, architecture: process.arch }))'
           xcrun swift --version | tee artifacts/ios/swift-version.txt
           xcrun --sdk iphonesimulator --show-sdk-version | tee artifacts/ios/sdk-version.txt
           pod --version | tee artifacts/ios/pod-version.txt
