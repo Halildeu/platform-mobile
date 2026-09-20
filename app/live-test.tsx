@@ -13,6 +13,7 @@ import { createRecordingBuffer } from '../src/audio/recordingBuffer';
 import * as api from '../src/audio/liveTestApi';
 import { NewMeetingForm } from '../src/audio/NewMeetingForm';
 import { configureBackgroundCapture, supportsBackgroundCapture } from '../src/audio/backgroundCapture';
+import { nativePcmStopReason, PcmStartAttempt } from '../src/audio/pcmLifecycle';
 import { SessionExpired } from '../src/auth/sessionManager';
 import { LiveAnalysisPanel } from '../src/analysis/LiveAnalysisPanel';
 import { newerAnalysis, type AnalysisSnapshot } from '../src/analysis/liveAnalysis';
@@ -39,6 +40,7 @@ export default function LiveTestScreen() {
   const [setup, setSetup] = useState(true);
   const backgroundActive = useRef(false);
   const captureStarted = useRef(false);
+  const captureAttempt = useRef(new PcmStartAttempt());
   const [signedIn, setSignedIn] = useState(false);
   const [lines, setLines] = useState<readonly TranscriptLine[]>([]);
   const [analysis, setAnalysis] = useState<AnalysisSnapshot | null>(null);
@@ -89,13 +91,18 @@ export default function LiveTestScreen() {
     setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | ${value}`].filter((_, index, all) => index < 3 || index >= all.length - 297));
   }
   const { stream } = useAudioStream({ sampleRate: 16000, channels: 1, encoding: 'int16',
-    onBuffer: (buffer) => live.current?.send(buffer.data, buffer.sampleRate, buffer.channels, Date.now()),
+    onBuffer: (buffer) => {
+      if (active.current && captureAttempt.current.acceptsBuffer(buffer as typeof buffer & { captureId?: string }, stream)) {
+        live.current?.send(buffer.data, buffer.sampleRate, buffer.channels, Date.now());
+      }
+    },
   });
 
   async function stop(reason = 'Belirtilmeyen durdurma çağrısı') {
     if (!active.current) return;
     active.current = false;
     captureStarted.current = false;
+    captureAttempt.current.clear();
     backgroundActive.current = false;
     clearInterval(diagnosticTimer.current);
     log(`Durdurma nedeni: ${reason}`);
@@ -135,7 +142,7 @@ export default function LiveTestScreen() {
         try { log('Ses tamponu kapanışı: ' + await bufferHandle.release()); audioBuffer.current = null; }
         catch { log('Şifreli tampon temizliği tamamlanamadı; teslim veya silinme doğrulanmadı.'); }
       }
-      void configureBackgroundCapture(false).catch(() => {});
+      void configureBackgroundCapture(false, stream).catch(() => {});
       setBusy(false);
     }
   }
@@ -157,9 +164,9 @@ export default function LiveTestScreen() {
   useEffect(() => { stopRef.current = stop; });
   useEffect(() => {
     const listener = stream.addListener?.('audioStreamStatus', (event) => {
-      if (!event.isStreaming && active.current && captureStarted.current) {
-        failure.current = 'Kayıt cihaz tarafından veya kayıt bildiriminden durduruldu.';
-        void stopRef.current('Cihaz veya bildirim kaydı durdurdu; ikisi native olaydan ayırt edilemiyor');
+      if (active.current && captureAttempt.current.acceptsStop(event, stream, captureStarted.current)) {
+        failure.current = nativePcmStopReason(event);
+        void stopRef.current(failure.current);
       }
     });
     return () => listener?.remove();
@@ -169,7 +176,9 @@ export default function LiveTestScreen() {
       if (active.current) log(`Uygulama durumu=${state}; arka plan kaydı=${backgroundActive.current}`);
       // The system permission dialog can temporarily deactivate the app.
       // No audio has started during this phase.
-      if (state !== 'active' && !permissionPending.current && !backgroundActive.current) {
+      // iOS inactive also means a system sheet/control center, not background.
+      // Native interruption events carry the actual cause when audio is lost.
+      if (state === 'background' && !permissionPending.current && !backgroundActive.current) {
         if (active.current) failure.current = 'Uygulama arka plana geçtiği için test durduruldu.';
         void stopRef.current('Uygulama arka plana geçti; arka plan kaydı etkin değil');
       }
@@ -319,7 +328,7 @@ export default function LiveTestScreen() {
       if (AppState.currentState === 'background') throw new Error('Teste başlamak için uygulamayı ön planda tutun.');
       markStage('Kayıt bildirimi');
       permissionPending.current = true;
-      try { await configureBackgroundCapture(background); }
+      try { await configureBackgroundCapture(background, stream); }
       finally { permissionPending.current = false; }
       if (generation.current !== run) return;
       if (['background'].includes(AppState.currentState)) throw new Error('Kaydı başlatmak için uygulamaya dönün.');
@@ -350,12 +359,17 @@ export default function LiveTestScreen() {
       const socket = new NativeWebSocket(`${api.BASE_URL.replace('https:', 'wss:')}/api/v1/audio-gateway/sessions/${encodeURIComponent(id)}/stream`, undefined,
         { headers: { Authorization: `Bearer ${token.current.jwt}` } });
       live.current = new ForegroundStream(socket as unknown as LiveSocket, () => {
-        if (generation.current !== run) return;
+        if (generation.current !== run || !active.current) return;
         markStage('Sunucu hazır; mikrofon başlatılıyor');
+        captureAttempt.current.request(stream);
         void stream.start().then(() => {
-          if (generation.current !== run) { stream.stop(); return; }
+          if (generation.current !== run || !active.current) { stream.stop(); return; }
           if (stream.sampleRate !== 16000 || stream.channels !== 1) throw new Error('Desteklenmeyen mikrofon biçimi.');
-          if (background && !stream.isStreaming) throw new Error('Arka plan kayıt servisi başlatılamadı.');
+          if (!stream.isStreaming) {
+            failure.current = captureAttempt.current.stopReasonAfterStart(stream) ?? 'Mikrofon başlatılırken kayıt durdu; ayrıntılı neden alınamadı.';
+            void stopRef.current(failure.current);
+            return;
+          }
           captureStarted.current = true;
           backgroundActive.current = background;
           setRecording(true); setBusy(false); setStatus('Dinleniyor — konuşabilirsiniz. Bitirmek için Durdur düğmesine basın.');
@@ -363,7 +377,7 @@ export default function LiveTestScreen() {
           log('Mikrofon açık; otomatik süre sınırı yok');
           diagnosticTimer.current = setInterval(() => logTransport(live.current), 10000);
         }).catch(() => {
-          if (generation.current !== run) return;
+          if (generation.current !== run || !active.current) return;
           failure.current = 'Mikrofon başlatılamadı veya gerekli 16 kHz mono ses biçimi sağlanamadı.';
           void stopRef.current('Mikrofon başlatma hatası');
         });
@@ -402,11 +416,11 @@ export default function LiveTestScreen() {
     <Pressable accessibilityRole="button" onPress={() => setSetup(!setup)}><Text style={styles.selected}>{setup ? 'Toplantı ayarlarını gizle' : 'Toplantı seç / ayarlar'}</Text></Pressable>
     {setup && <View>
     <Text style={styles.note}>{background ? `Arka planda kayıt açık. Kaydı uygulamadan${Platform.OS === 'android' ? ' veya kayıt bildiriminden' : ''} durdurabilirsiniz. Otomatik süre sınırı yoktur.` : 'Bu kısa denemede ekran açık kalmalıdır.'} Kısa ağ kesintisinde yeniden bağlanmayı dener; düzelmezse test durur.</Text>
-    {supportsBackgroundCapture() && <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+    {supportsBackgroundCapture(stream) && <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
       <Text style={styles.note}>Ekran kapalıyken kayda devam et</Text>
       <Switch accessibilityLabel="Arka planda kayıt" value={background} disabled={busy || recording} onValueChange={setBackground} />
     </View>}
-    {Platform.OS === 'android' && !supportsBackgroundCapture() && <Text style={styles.note}>Arka plan kaydı bu APK’da hazır değil. Uygulama ekran açıkken kayıt yapabilir.</Text>}
+    {(Platform.OS === 'android' || Platform.OS === 'ios') && !supportsBackgroundCapture(stream) && <Text style={styles.note}>Arka plan kaydı bu uygulama sürümünde hazır değil. Uygulama ekran açıkken kayıt yapabilir.</Text>}
     <ScrollView style={{ maxHeight: 150 }}>
     <Pressable accessibilityState={{ disabled: busy || recording }} disabled={busy || recording} style={[styles.button, (busy || recording) && styles.disabled]} onPress={() => void signIn()}><Text style={styles.text}>Giriş yap</Text></Pressable>
     <Pressable disabled={busy || recording} style={[styles.button, (busy || recording) && styles.disabled]} onPress={() => void signOut()}><Text style={styles.text}>Çıkış yap</Text></Pressable>

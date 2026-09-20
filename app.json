@@ -55,6 +55,7 @@
       ["expo-sqlite", { "useSQLCipher": true }],
       "expo-notifications",
       "expo-local-authentication",
+      "./plugins/withIosPcmLifecycle.cjs",
       [
         "expo-audio",
         {

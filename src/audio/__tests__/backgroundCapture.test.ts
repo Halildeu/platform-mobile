@@ -42,3 +42,22 @@ it('does not offer the Android foreground service on iOS', async () => {
   await expect(configureBackgroundCapture(true)).rejects.toThrow('desteklenmiyor');
   expect(native.start).not.toHaveBeenCalled(); expect(Notifications.getPermissionsAsync).not.toHaveBeenCalled();
 });
+
+it('configures iOS per stream without requesting Android notification permission', async () => {
+  Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
+  const stream = { workcubePcmLifecycleVersion: 1, configureBackgroundCapture: jest.fn() };
+  expect(supportsBackgroundCapture(stream)).toBe(true);
+  await configureBackgroundCapture(true, stream);
+  await configureBackgroundCapture(false, stream);
+  expect(stream.configureBackgroundCapture.mock.calls).toEqual([[true], [false]]);
+  expect(native.start).not.toHaveBeenCalled();
+  expect(native.stop).not.toHaveBeenCalled();
+  expect(Notifications.getPermissionsAsync).not.toHaveBeenCalled();
+});
+
+it('surfaces native iOS configuration errors before capture', async () => {
+  Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
+  const stream = { workcubePcmLifecycleVersion: 1, configureBackgroundCapture: () => { throw new Error('Stop first'); } };
+  await expect(configureBackgroundCapture(true, stream)).rejects.toThrow('Stop first');
+  expect(native.start).not.toHaveBeenCalled();
+});

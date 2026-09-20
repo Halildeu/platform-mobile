@@ -6,6 +6,12 @@ import { clearMeetingViews, saveMeetingView } from '../meetingViewCache';
 
 const mockStart = jest.fn().mockResolvedValue(undefined);
 const mockStop = jest.fn();
+let mockStatusListener: (event: { isStreaming: boolean; captureId?: string; reason?: string }) => void;
+const mockStream = {
+  start: mockStart, stop: mockStop, sampleRate: 16000, channels: 1, isStreaming: true,
+  workcubeCaptureId: '', workcubeLastStopReason: '', workcubePcmLifecycleVersion: 0, configureBackgroundCapture: jest.fn(),
+  addListener: jest.fn((_name, listener) => { mockStatusListener = listener; return { remove: jest.fn() }; }),
+};
 const mockPermission = jest.fn();
 const mockDrain = jest.fn();
 let mockFailure: (message: string) => void;
@@ -13,7 +19,7 @@ let mockReady: () => void;
 let mockParams: { notificationMeetingId?: string } = {};
 jest.mock('expo-audio', () => ({
   AudioModule: { requestRecordingPermissionsAsync: (...args: unknown[]) => mockPermission(...args) },
-  useAudioStream: () => ({ stream: { start: mockStart, stop: mockStop, sampleRate: 16000, channels: 1 } }),
+  useAudioStream: () => ({ stream: mockStream }),
 }));
 jest.mock('expo-router', () => ({ useLocalSearchParams: () => mockParams }));
 jest.mock('../backgroundCapture', () => ({ supportsBackgroundCapture: () => false, configureBackgroundCapture: jest.fn(async () => {}) }));
@@ -37,6 +43,8 @@ beforeEach(() => {
   jest.clearAllMocks();
   clearMeetingViews();
   mockParams = {};
+  Object.assign(mockStream, { isStreaming: true, workcubeCaptureId: '', workcubeLastStopReason: '', workcubePcmLifecycleVersion: 0 });
+  mockStart.mockResolvedValue(undefined);
   mockDrain.mockResolvedValue(false);
   jest.mocked(api.login).mockResolvedValue({ jwt: 'test-only', expiresAt: Date.now() + 600000 });
   jest.mocked(api.validSession).mockResolvedValue({ jwt: 'test-only', expiresAt: Date.now() + 600000 });
@@ -210,4 +218,90 @@ it('restores canonical full text in Metin even when a partial navigation cache e
   expect(api.savedTranscript).toHaveBeenCalledWith('meeting-1', 'run-1');
   await act(async () => fireEvent.press(screen.getByText('Çıkış yap')));
   expect(screen.queryByText('FULL_SAVED_TRANSCRIPT')).toBeNull();
+});
+
+it('does not misclassify an inactive system sheet as background or a user stop', async () => {
+  mockPermission.mockResolvedValue({ granted: true });
+  const listener = jest.spyOn(AppState, 'addEventListener');
+  const screen = await openAndStart();
+  await waitFor(() => expect(api.begin).toHaveBeenCalled());
+  await act(async () => mockReady());
+  act(() => listener.mock.calls[0][1]('inactive'));
+  expect(mockStop).not.toHaveBeenCalled();
+  expect(screen.getByText('● Mikrofon açık · Kayıt sürüyor')).toBeTruthy();
+  await act(async () => listener.mock.calls[0][1]('background'));
+  expect(api.finish).toHaveBeenCalledTimes(1);
+  expect(screen.getByText('Uygulama arka plana geçtiği için test durduruldu.')).toBeTruthy();
+});
+
+it('preserves a native interruption before start resolves and finishes the server session once', async () => {
+  mockPermission.mockResolvedValue({ granted: true });
+  mockStream.workcubePcmLifecycleVersion = 1;
+  mockStream.workcubeCaptureId = 'previous-capture';
+  let resolveStart!: () => void;
+  mockStart.mockImplementationOnce(() => {
+    mockStream.workcubeCaptureId = 'current-capture';
+    return new Promise<void>(resolve => { resolveStart = resolve; });
+  });
+  const screen = await openAndStart();
+  await waitFor(() => expect(api.begin).toHaveBeenCalled());
+  act(() => mockReady());
+  await act(async () => {
+    mockStream.isStreaming = false;
+    mockStatusListener({ isStreaming: false, captureId: 'current-capture', reason: 'audio-interruption' });
+  });
+  expect(api.finish).toHaveBeenCalledTimes(1);
+  await act(async () => resolveStart());
+  expect(screen.getByText(/iOS ses kaydını bir çağrı/)).toBeTruthy();
+  expect(screen.queryByText('● Mikrofon açık · Kayıt sürüyor')).toBeNull();
+  fireEvent.press(screen.getByText('Tanılama'));
+  expect(screen.getByText(/Durdurma nedeni: iOS ses kaydını bir çağrı/)).toBeTruthy();
+});
+
+it('ignores a delayed old native stop while the new capture is active', async () => {
+  mockPermission.mockResolvedValue({ granted: true });
+  mockStream.workcubePcmLifecycleVersion = 1;
+  mockStream.workcubeCaptureId = 'previous-capture';
+  mockStart.mockImplementationOnce(async () => { mockStream.workcubeCaptureId = 'current-capture'; });
+  const screen = await openAndStart();
+  await waitFor(() => expect(api.begin).toHaveBeenCalled());
+  await act(async () => mockReady());
+  act(() => mockStatusListener({ isStreaming: false, captureId: 'previous-capture', reason: 'media-services-reset' }));
+  expect(mockStop).not.toHaveBeenCalled();
+  expect(api.finish).not.toHaveBeenCalled();
+  expect(screen.getByText('● Mikrofon açık · Kayıt sürüyor')).toBeTruthy();
+  await act(async () => {
+    mockStream.isStreaming = false;
+    mockStatusListener({ isStreaming: false, captureId: 'current-capture', reason: 'input-route-lost' });
+  });
+  expect(api.finish).toHaveBeenCalledTimes(1);
+  expect(screen.getByText(/Kullanılan mikrofon veya kulaklık bağlantısı kesildi/)).toBeTruthy();
+});
+
+it('does not show microphone running if native start resolves after stopping without a status event', async () => {
+  mockPermission.mockResolvedValue({ granted: true });
+  mockStart.mockImplementationOnce(async () => { mockStream.isStreaming = false; });
+  const screen = await openAndStart();
+  await waitFor(() => expect(api.begin).toHaveBeenCalled());
+  await act(async () => mockReady());
+  expect(screen.queryByText('● Mikrofon açık · Kayıt sürüyor')).toBeNull();
+  expect(api.finish).toHaveBeenCalledTimes(1);
+});
+
+it('retains native reason when start resolves before the queued terminal event', async () => {
+  mockPermission.mockResolvedValue({ granted: true });
+  mockStream.workcubePcmLifecycleVersion = 1;
+  mockStream.workcubeCaptureId = 'previous-capture';
+  mockStart.mockImplementationOnce(async () => {
+    mockStream.workcubeCaptureId = 'current-capture';
+    mockStream.workcubeLastStopReason = 'media-services-reset';
+    mockStream.isStreaming = false;
+  });
+  const screen = await openAndStart();
+  await waitFor(() => expect(api.begin).toHaveBeenCalled());
+  await act(async () => mockReady());
+  expect(api.finish).toHaveBeenCalledTimes(1);
+  expect(screen.getByText('iOS ses servisi yeniden başlatıldı; mikrofon durduruldu.')).toBeTruthy();
+  await act(async () => mockStatusListener({ isStreaming: false, captureId: 'current-capture', reason: 'media-services-reset' }));
+  expect(api.finish).toHaveBeenCalledTimes(1);
 });
