@@ -4,6 +4,7 @@ import LiveTestScreen from '../../../app/live-test';
 import * as api from '../liveTestApi';
 import { clearMeetingViews, saveMeetingView } from '../meetingViewCache';
 import type { LiveText } from '../foregroundStream';
+import type { AnalysisSnapshot } from '../../analysis/liveAnalysis';
 
 const mockStart = jest.fn().mockResolvedValue(undefined);
 const mockStop = jest.fn();
@@ -18,6 +19,7 @@ const mockDrain = jest.fn();
 let mockFailure: (message: string) => void;
 let mockReady: () => void;
 let mockText: (line: LiveText) => void;
+let mockAnalysis: (snapshot: AnalysisSnapshot) => void;
 let mockParams: { notificationMeetingId?: string } = {};
 jest.mock('expo-audio', () => ({
   AudioModule: { requestRecordingPermissionsAsync: (...args: unknown[]) => mockPermission(...args) },
@@ -32,8 +34,9 @@ jest.mock('../liveTestApi', () => ({
   restoreSession: jest.fn(), validSession: jest.fn(), logout: jest.fn(), persistedResult: jest.fn(), savedTranscript: jest.fn(),
   BASE_URL: 'https://example.test', CONSENT: 'Test onayı',
 }));
-jest.mock('../../analysis/analysisSubscription', () => ({ subscribeAnalysis: () => jest.fn() }));
-jest.mock('../../analysis/LiveAnalysisPanel', () => ({ LiveAnalysisPanel: () => null }));
+jest.mock('../../analysis/analysisSubscription', () => ({ subscribeAnalysis: (options: { onSnapshot: typeof mockAnalysis }) => {
+  mockAnalysis = options.onSnapshot; return jest.fn();
+} }));
 jest.mock('../foregroundStream', () => ({ ForegroundStream: jest.fn().mockImplementation(
   (_socket, _ready, _text, failure) => {
     mockFailure = failure;
@@ -333,4 +336,52 @@ it('incomplete stop records local stop and never waits for a final analysis', as
   expect(screen.getByText('Test durdu; son sözlerin tamamlandığı doğrulanamadı.')).toBeTruthy();
   fireEvent.press(screen.getByText('Tanılama'));
   expect(screen.queryByText(/Canlı analiz sonucu 20 saniyede gelmedi/)).toBeNull();
+});
+
+it('shows the reopened meeting server result in each analysis tab, replacing an old live cache', async () => {
+  saveMeetingView('meeting-1', { lines: [], diagnostics: [], analysis: { version: 1, partial: true, summary: 'OLD_LIVE', decisions: [], actions: [] } });
+  jest.mocked(api.restoreSession).mockResolvedValue({ jwt: 'test-only', expiresAt: Date.now() + 600000 });
+  jest.mocked(api.meetings).mockResolvedValue([{ id: 'meeting-1', title: 'Test toplantısı' }, { id: 'meeting-2', title: 'Boş toplantı' }]);
+  jest.mocked(api.persistedResult).mockImplementation(async id => {
+    if (id !== 'meeting-1') throw new Error('Sonuç bulunamadı');
+    return { meetingId: id, analysisRunId: 'run-1', sessionId: 'session-1', generatedAt: '2026-09-21', summary: 'Kayıtlı özet',
+      decisions: ['Kayıtlı karar'], actions: [{ text: 'Dosyayı hazırla', owner: 'Zeynep', dueDate: '2026-09-22' }], sources: [] };
+  });
+  const screen = render(<LiveTestScreen />);
+  await waitFor(() => expect(screen.getByText('Test toplantısı')).toBeTruthy());
+  fireEvent.press(screen.getByText('Test toplantısı'));
+  for (const [tab, text] of [['Özet', 'Kayıtlı özet'], ['Kararlar', '• Kayıtlı karar'], ['Aksiyonlar', 'Dosyayı hazırla']]) {
+    fireEvent.press(screen.getByRole('tab', { name: tab }));
+    await waitFor(() => expect(screen.getByText(text)).toBeTruthy());
+    expect(screen.queryByText('OLD_LIVE')).toBeNull();
+  }
+  fireEvent.press(screen.getByText('Boş toplantı'));
+  fireEvent.press(screen.getByRole('tab', { name: 'Aksiyonlar' }));
+  await waitFor(() => expect(screen.getByText('Sonuç bulunamadı')).toBeTruthy());
+  expect(screen.queryByText('Dosyayı hazırla')).toBeNull();
+  fireEvent.press(screen.getByText('Test toplantısı'));
+  fireEvent.press(screen.getByRole('tab', { name: 'Kararlar' }));
+  await waitFor(() => expect(screen.getByText('• Kayıtlı karar')).toBeTruthy());
+  expect(api.begin).not.toHaveBeenCalled();
+});
+
+it('renders successive live decisions and actions while the microphone is still running', async () => {
+  mockPermission.mockResolvedValue({ granted: true });
+  const screen = await openAndStart();
+  await act(async () => mockReady());
+  const initial: AnalysisSnapshot = { version: 1, partial: true, summary: 'Canlı özet', decisions: ['Canlı karar'],
+    actions: [{ text: 'İlk görev', owner: 'Zeynep', dueDate: null }] };
+  await act(async () => mockAnalysis(initial));
+  fireEvent.press(screen.getByRole('tab', { name: 'Kararlar' }));
+  expect(screen.getByText('• Canlı karar')).toBeTruthy();
+  fireEvent.press(screen.getByRole('tab', { name: 'Aksiyonlar' }));
+  expect(screen.getByText('İlk görev')).toBeTruthy();
+  await act(async () => mockAnalysis({ ...initial, version: 2, actions: [{ text: 'Güncellenmiş görev', owner: 'Mehmet', dueDate: '2026-09-23' }] }));
+  expect(screen.getByText('Güncellenmiş görev')).toBeTruthy();
+  expect(screen.queryByText('İlk görev')).toBeNull();
+  expect(screen.getByText('● Mikrofon açık · Kayıt sürüyor')).toBeTruthy();
+  expect(screen.getByTestId('recording-controls')).toBeTruthy();
+  expect(mockStop).not.toHaveBeenCalled(); expect(api.completeCapture).not.toHaveBeenCalled();
+  expect(screen.queryByText('Kaydedilmiş toplantı sonucu')).toBeNull();
+  await act(async () => mockFailure('Kontrollü test kapanışı'));
 });

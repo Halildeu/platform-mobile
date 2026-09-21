@@ -1,5 +1,6 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { Alert, AppState, Text as MockText } from 'react-native';
+import type { ReactNode } from 'react';
 import LiveTestScreen from '../../../app/live-test';
 import * as api from '../liveTestApi';
 
@@ -11,7 +12,7 @@ jest.mock('expo-router', () => ({ useLocalSearchParams: () => ({}) }));
 jest.mock('../backgroundCapture', () => ({ supportsBackgroundCapture: () => false, configureBackgroundCapture: async () => {} }));
 jest.mock('expo-web-browser', () => ({ maybeCompleteAuthSession: jest.fn() }));
 jest.mock('../liveTestApi', () => ({ login: jest.fn(), meetings: jest.fn(), begin: jest.fn(), finish: jest.fn(), completeCapture: jest.fn(), captureStopped: jest.fn(), pendingRecording: jest.fn(async () => null), abandonRecording: jest.fn(), restoreSession: jest.fn(), validSession: jest.fn(), logout: jest.fn(), BASE_URL: 'https://example.test', CONSENT: 'Synthetic consent' }));
-jest.mock('../../transcript/TranscriptView', () => ({ TranscriptView: ({ lines }: { lines: { text: string }[] }) => <MockText>{lines.map(l => l.text).join(' ')}</MockText> }));
+jest.mock('../../transcript/TranscriptView', () => ({ TranscriptView: ({ lines, header }: { lines: { text: string }[]; header?: ReactNode }) => <>{header}<MockText>{lines.map(l => l.text).join(' ')}</MockText></> }));
 jest.mock('../../analysis/LiveAnalysisPanel', () => ({ LiveAnalysisPanel: ({ snapshot }: { snapshot: { summary: string } | null }) => <MockText>{snapshot?.summary}</MockText> }));
 jest.mock('../../analysis/analysisSubscription', () => ({ subscribeAnalysis: (options: { onSnapshot: typeof mockSnapshot }) => { mockSnapshot = options.onSnapshot; return jest.fn(); } }));
 jest.mock('../foregroundStream', () => ({ ForegroundStream: jest.fn().mockImplementation((_socket, ready, text) => { mockText = text; ready(); return { stop: async () => true, dispose: jest.fn(), completionConfirmed: () => true, diagnostics: () => ({}) }; }) }));

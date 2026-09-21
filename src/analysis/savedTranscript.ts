@@ -55,8 +55,13 @@ function readSegments(p: Record<string, unknown>, transcript: string): SavedTran
 
 /** Pre-number in canonical order, never FlatList mount/scroll order. Each occurrence starts anew. */
 export function savedTranscriptRows(document: SavedTranscriptDocument): SavedTranscriptRow[] {
-  const chunks = (text: string, speaker?: number | 'unknown'): SavedTranscriptRow[] =>
-    (text.match(/[\s\S]{1,2000}/gu) ?? []).map(part => ({ text: part, speaker }));
+  return savedTranscriptTurns(document).flatMap(row =>
+    (row.text.match(/[\s\S]{1,2000}/gu) ?? []).map(text => ({ ...row, text })));
+}
+
+/** Logical source turns before viewport chunking; chunk boundaries carry no speaker meaning. */
+export function savedTranscriptTurns(document: SavedTranscriptDocument): SavedTranscriptRow[] {
+  const chunks = (text: string, speaker?: number | 'unknown'): SavedTranscriptRow[] => text ? [{ text, speaker }] : [];
   if (!document.segments?.some(item => item.speakerAttribution)) return chunks(document.text);
   const numbers = new SpeakerNumbering();
   const rows: SavedTranscriptRow[] = [];

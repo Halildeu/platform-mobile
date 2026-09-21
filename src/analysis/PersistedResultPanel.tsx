@@ -11,11 +11,12 @@ import { useResultExport } from './useResultExport';
 
 type Props = {
   meetingId: string; load?: (id: string) => Promise<PersistedResult>; onDiagnostic?: (message: string) => void;
+  section?: 'all' | 'summary' | 'decisions' | 'actions';
 };
 export function PersistedResultPanel(props: Props) {
   return <ResultForMeeting key={props.meetingId} {...props} />;
 }
-function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic }: Props) {
+function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic, section = 'all' }: Props) {
   const [result, setResult] = useState<PersistedResult | null>(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -77,31 +78,33 @@ function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic }: P
       <Text style={styles.text}>Oluşturulma: {result.generatedAt}</Text>
       <Text selectable style={styles.text}>Oturum: {result.sessionId}</Text>
 
-      <Text style={styles.title}>Özet</Text>
-      <Text selectable style={styles.text}>{result.summary || 'Bu sonuçta gösterilebilir özet bulunmuyor.'}</Text>
-      <Text style={styles.title}>Kararlar</Text>
+      {(section === 'all' || section === 'summary') && <><Text style={styles.title}>Özet</Text>
+      <Text selectable style={styles.text}>{result.summary || 'Bu sonuçta gösterilebilir özet bulunmuyor.'}</Text></>}
+      {(section === 'all' || section === 'decisions') && <><Text style={styles.title}>Kararlar</Text>
       {!result.decisions.length && <Text style={styles.text}>Bu sonuçta karar bulunmuyor.</Text>}
-      {result.decisions.map((d, i) => <Text selectable key={i} style={styles.text}>• {d}</Text>)}
-      <Text style={styles.title}>Aksiyonlar</Text>
+      {result.decisions.map((d, i) => <Text selectable key={i} style={styles.text}>• {d}</Text>)}</>}
+      {(section === 'all' || section === 'actions') && <><Text style={styles.title}>Aksiyonlar</Text>
       {!result.actions.length && <Text style={styles.text}>Bu sonuçta aksiyon bulunmuyor.</Text>}
       {result.actions.map((a, i) => <View key={i}><Text selectable style={styles.text}>{a.text}</Text>
-        <Text selectable style={styles.text}>Sorumlu: {a.owner ?? 'Belirtilmedi'} · Tarih: {a.dueDate ?? 'Belirtilmedi'}</Text></View>)}
+        <Text selectable style={styles.text}>Sorumlu: {a.owner ?? 'Belirtilmedi'} · Tarih: {a.dueDate ?? 'Belirtilmedi'}</Text></View>)}</>}
+      {section === 'all' && <>
       <Pressable accessibilityRole="button" onPress={() => setSources(!sources)}><Text style={styles.link}>{sources ? 'Kaynakları gizle' : 'Kaynakları göster'}</Text></Pressable>
       {sources && (result.sources.length ? result.sources.map((s, i) => <View key={i}>
         <Text style={styles.title}>{s.claim}</Text><Text selectable style={styles.text}>{s.text}</Text>
         <Text style={styles.text}>Kaynak {i + 1}</Text>
-      </View>) : <Text style={styles.text}>Bu sonuçta kaynak alıntısı bulunmuyor.</Text>)}
+      </View>) : <Text style={styles.text}>Bu sonuçta kaynak alıntısı bulunmuyor.</Text>)}</>}
+      {section !== 'all' && <Text style={styles.text}>Dışa aktarma özet, kararlar ve aksiyonların tamamını içerir.</Text>}
       <Pressable accessibilityRole="button" disabled={busy || sharing || exports.working} onPress={() => void exports.copy(analysisMarkdown(result))}>
         <Text style={styles.link}>Kaydedilmiş sonucun tamamını kopyala</Text>
       </Pressable>
       <Pressable accessibilityRole="button" disabled={busy || sharing || exports.working} onPress={() => void exportResult('markdown')}>
-        <Text style={styles.link}>Kaydedilmiş sonucu Markdown olarak paylaş</Text>
+        <Text style={styles.link}>{section === 'all' ? 'Kaydedilmiş sonucu Markdown olarak paylaş' : 'Kaydedilmiş sonucun tamamını Markdown olarak paylaş'}</Text>
       </Pressable>
       <Pressable accessibilityRole="button" disabled={busy || sharing || exports.working} onPress={() => void exports.pdf(analysisHtml(result))}>
-        <Text style={styles.link}>Kaydedilmiş sonucu PDF olarak paylaş</Text>
+        <Text style={styles.link}>{section === 'all' ? 'Kaydedilmiş sonucu PDF olarak paylaş' : 'Kaydedilmiş sonucun tamamını PDF olarak paylaş'}</Text>
       </Pressable>
       <Pressable accessibilityRole="button" disabled={busy || sharing || exports.working} onPress={() => void exportResult('pdf')}>
-        <Text style={styles.link}>Kaydedilmiş sonucu yazdır</Text>
+        <Text style={styles.link}>{section === 'all' ? 'Kaydedilmiş sonucu yazdır' : 'Kaydedilmiş sonucun tamamını yazdır'}</Text>
       </Pressable>
       {!!exports.message && <Text accessibilityRole="alert" style={styles.text}>{exports.message}</Text>}
       {!!shareError && <Text accessibilityRole="alert" style={styles.text}>{shareError}</Text>}

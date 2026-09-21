@@ -11,7 +11,7 @@
  * kaydırdığında bu bozulmaz (manual override) — kullanıcı en alta dönene kadar
  * otomatik kaydırma askıya alınır. Metinler i18next (Türkçe varsayılan).
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import {
   FlatList,
   Pressable,
@@ -51,6 +51,7 @@ export function transcriptParagraphs(lines: readonly TranscriptLine[]): Transcri
 
 export interface TranscriptViewProps {
   lines: readonly TranscriptLine[];
+  header?: ReactElement;
   /** Otomatik-kaydırma özelliğini tümden kapatmak için false. Varsayılan açık. */
   autoScroll?: boolean;
 }
@@ -60,6 +61,7 @@ const STICK_THRESHOLD_PX = 48;
 
 export function TranscriptView({
   lines,
+  header,
   autoScroll = true,
 }: TranscriptViewProps) {
   const { t } = useTranslation();
@@ -85,14 +87,6 @@ export function TranscriptView({
     [],
   );
 
-  if (lines.length === 0) {
-    return (
-      <View style={styles.empty}>
-        <Text style={styles.emptyText}>{t('transcript.waiting')}</Text>
-      </View>
-    );
-  }
-
   return (
     <View style={{ flex: 1 }}>
     {lines.some(line => line.speakerAttribution) && <Text style={styles.speakerTag}>{t('transcript.speakerNotice')}</Text>}
@@ -103,10 +97,13 @@ export function TranscriptView({
       testID="transcript-list"
       ref={listRef}
       data={paragraphs}
+      ListHeaderComponent={header}
+      ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyText}>{t('transcript.waiting')}</Text></View>}
+      keyboardShouldPersistTaps="handled"
       keyExtractor={(paragraph) => String(paragraph[0].seq)}
       contentContainerStyle={styles.content}
       onScroll={onScroll}
-      onContentSizeChange={() => { if (autoScroll && pinnedToBottom) listRef.current?.scrollToEnd({ animated: true }); }}
+      onContentSizeChange={() => { if (lines.length && autoScroll && pinnedToBottom) listRef.current?.scrollToEnd({ animated: true }); }}
       scrollEventThrottle={16}
       renderItem={({ item }) => (
         <View style={styles.row}>
@@ -144,6 +141,6 @@ const styles = StyleSheet.create({
   revised: { color: '#e2e8f0' },
   revisedTag: { fontSize: 12, color: '#f59e0b' },
   speakerTag: { fontSize: 13, color: '#93c5fd' },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  empty: { minHeight: 160, alignItems: 'center', justifyContent: 'center' },
   emptyText: { color: '#64748b', fontSize: 14 },
 });

@@ -116,3 +116,21 @@ test('does not label an epoch source timestamp as recording-relative seconds', a
   expect(screen.getByText('Kaynak 1')).toBeTruthy();
   expect(screen.getByText('Kaynak alıntısı')).toBeTruthy();
 });
+
+test('section changes keep the validated occurrence and clearly export the complete saved report', async () => {
+  const value = { ...result('A'), decisions: ['Çevrim içi sunum'], actions: [{ text: 'Dosyayı hazırla', owner: 'Zeynep', dueDate: '2026-09-22' }] };
+  const load = jest.fn().mockResolvedValue(value);
+  const screen = render(<PersistedResultPanel meetingId="A" section="summary" load={load} />);
+  await act(async () => {});
+  expect(screen.getByText('Kalıcı özet')).toBeTruthy();
+  expect(screen.queryByText('Dosyayı hazırla')).toBeNull();
+  screen.rerender(<PersistedResultPanel meetingId="A" section="decisions" load={load} />);
+  expect(screen.getByText('• Çevrim içi sunum')).toBeTruthy();
+  expect(screen.queryByText('Kalıcı özet')).toBeNull();
+  screen.rerender(<PersistedResultPanel meetingId="A" section="actions" load={load} />);
+  expect(screen.getByText('Dosyayı hazırla')).toBeTruthy();
+  expect(load).toHaveBeenCalledTimes(1);
+  await act(async () => fireEvent.press(screen.getByText('Kaydedilmiş sonucun tamamını PDF olarak paylaş')));
+  const html = jest.mocked(resultExporter.pdf).mock.calls.at(-1)?.[0];
+  expect(html).toContain('Kalıcı özet'); expect(html).toContain('Çevrim içi sunum'); expect(html).toContain('Dosyayı hazırla');
+});

@@ -4,6 +4,7 @@ import * as Crypto from 'expo-crypto';
 import { AudioModule, useAudioStream } from 'expo-audio';
 import * as WebBrowser from 'expo-web-browser';
 import { useLocalSearchParams } from 'expo-router';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { ForegroundStream, type LiveSocket } from '../src/audio/foregroundStream';
 import { applyTranscriptEvent, type TranscriptLine } from '../src/transcript/transcriptState';
 import { TranscriptView } from '../src/transcript/TranscriptView';
@@ -421,13 +422,12 @@ export default function LiveTestScreen() {
     }
   }
 
-  return <View style={styles.page}>
+  const header = <View style={{ gap: 12 }}>
     <Text style={styles.title}>Toplantı</Text>
     <Text style={styles.text}>{status}</Text>
     {signedIn && !recording && !busy && <PendingRecordingPanel beforeResolve={async () => {
       if (audioBuffer.current) { await audioBuffer.current.release(); audioBuffer.current = null; }
     }} />}
-    {recording && <Text accessibilityRole="alert" style={styles.recording}>● Mikrofon açık · Kayıt sürüyor</Text>}
     <Pressable accessibilityRole="button" onPress={() => setSetup(!setup)}><Text style={styles.selected}>{setup ? 'Toplantı ayarlarını gizle' : 'Toplantı seç / ayarlar'}</Text></Pressable>
     {setup && <View>
     <Text style={styles.note}>{background ? `Arka planda kayıt açık. Kaydı uygulamadan${Platform.OS === 'android' ? ' veya kayıt bildiriminden' : ''} durdurabilirsiniz. Otomatik süre sınırı yoktur.` : 'Bu kısa denemede ekran açık kalmalıdır.'} Kısa ağ kesintisinde yeniden bağlanmayı dener; düzelmezse test durur.</Text>
@@ -436,7 +436,7 @@ export default function LiveTestScreen() {
       <Switch accessibilityLabel="Arka planda kayıt" value={background} disabled={busy || recording} onValueChange={setBackground} />
     </View>}
     {(Platform.OS === 'android' || Platform.OS === 'ios') && !supportsBackgroundCapture(stream) && <Text style={styles.note}>Arka plan kaydı bu uygulama sürümünde hazır değil. Uygulama ekran açıkken kayıt yapabilir.</Text>}
-    <ScrollView style={{ maxHeight: 150 }}>
+    <View style={{ gap: 8 }}>
     <Pressable accessibilityState={{ disabled: busy || recording }} disabled={busy || recording} style={[styles.button, (busy || recording) && styles.disabled]} onPress={() => void signIn()}><Text style={styles.text}>Giriş yap</Text></Pressable>
     <Pressable disabled={busy || recording} style={[styles.button, (busy || recording) && styles.disabled]} onPress={() => void signOut()}><Text style={styles.text}>Çıkış yap</Text></Pressable>
     <View>
@@ -448,22 +448,35 @@ export default function LiveTestScreen() {
       {list.map((meeting) => <Pressable key={meeting.id} disabled={busy || recording} onPress={() => selectMeeting(meeting.id)}>
         <Text style={[styles.text, selected === meeting.id && styles.selected]}>{selected === meeting.id ? '✓ ' : ''}{meeting.title}</Text>
       </Pressable>)}
-    </View></ScrollView></View>}
+    </View></View></View>}
     <Pressable accessibilityState={{ disabled: !selected || busy || recording }} disabled={!selected || busy || recording} style={[styles.button, (!selected || busy || recording) && styles.disabled]} onPress={() => Alert.alert('Konuşma testi', api.CONSENT,
       [{ text: 'Vazgeç' }, { text: 'Kabul et ve başlat', onPress: () => { setSetup(false); setTab('text'); void start(); } }])}><Text style={styles.text}>Konuşma testini başlat</Text></Pressable>
-    <Pressable accessibilityRole="button" accessibilityState={{ disabled: !recording }} disabled={!recording}
-      style={[styles.button, !recording && styles.disabled]} onPress={confirmUserStop}><Text style={styles.text}>Durdur</Text></Pressable>
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
       {([['text', 'Metin'], ['summary', 'Özet'], ['decisions', 'Kararlar'], ['actions', 'Aksiyonlar'], ['saved', 'Kaydedilen'], ['diagnostics', 'Tanılama']] as const).map(([key, label]) =>
         <Pressable key={key} accessibilityRole="tab" accessibilityState={{ selected: tab === key }} onPress={() => setTab(key)} style={{ padding: 8, borderBottomWidth: 2, borderBottomColor: tab === key ? '#93c5fd' : 'transparent' }}><Text style={styles.text}>{label}</Text></Pressable>)}
     </View>
+  </View>;
+  const canReadSaved = signedIn && !!selected && !recording && !busy && !currentCapture;
+  return <SafeAreaView edges={['left', 'right', 'bottom']} style={styles.page}>
+    {recording && <View testID="recording-controls">
+      <Text accessibilityRole="alert" style={styles.recording}>● Mikrofon açık · Kayıt sürüyor</Text>
+      <Pressable accessibilityRole="button" style={styles.button} onPress={confirmUserStop}><Text style={styles.text}>Durdur</Text></Pressable>
+    </View>}
     {tab === 'text' && <View style={{ flex: 1 }}>{signedIn && selected && !recording && !busy && !currentCapture
-      ? <SavedTranscript meetingId={selected} />
-      : <><TranscriptView lines={lines} />{!lines.length && <Text style={styles.note}>Kayıt başladığında konuşmanız burada görünecek.</Text>}</>}</View>}
-    {tab !== 'text' && <ScrollView style={{ flex: 1 }}>
+      ? <SavedTranscript meetingId={selected} header={header} />
+      : <TranscriptView lines={lines} header={header} />}</View>}
+    {tab !== 'text' && <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
+      {header}
       {tab === 'saved' && signedIn && selected && !recording && !busy && <PersistedResultPanel key={selected} meetingId={selected} onDiagnostic={log} />}
       {tab === 'saved' && (!signedIn || !selected || recording || busy) && <Text style={styles.note}>Kaydı durdurup bir toplantı seçtikten sonra kalıcı sonucu açabilirsiniz.</Text>}
-      {(tab === 'summary' || tab === 'decisions' || tab === 'actions') && <LiveAnalysisPanel snapshot={analysis} status={analysisStatus} section={tab} />}
+      {(tab === 'summary' || tab === 'decisions' || tab === 'actions') && (canReadSaved && selected
+        ? <PersistedResultPanel meetingId={selected} onDiagnostic={log} section={tab} />
+        : <>
+          <LiveAnalysisPanel snapshot={analysis} status={analysisStatus} section={tab} />
+          {signedIn && selected && !recording && !busy && <Pressable accessibilityRole="button" onPress={() => setTab('saved')}>
+            <Text style={styles.selected}>Kaydedilmiş sonucu kontrol et</Text>
+          </Pressable>}
+        </>)}
       {tab === 'diagnostics' && <View>
         <Text style={styles.text}>Tanılama kaydı (bu deneme)</Text>
         <Text selectable style={styles.note}>{diagnostics.join('\n')}</Text>
@@ -472,7 +485,7 @@ export default function LiveTestScreen() {
         </Pressable>
       </View>}
     </ScrollView>}
-  </View>;
+  </SafeAreaView>;
 }
 
 const styles = StyleSheet.create({
