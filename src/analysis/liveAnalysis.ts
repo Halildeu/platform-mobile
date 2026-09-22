@@ -31,24 +31,35 @@ export function newerAnalysis(previous: AnalysisSnapshot | null, next: AnalysisS
 /** Incremental bounded SSE parser; no transcript or token logging. */
 export class AnalysisEvents {
   private carry = '';
+  private counts = { heartbeats: 0, accepted: 0, invalidJson: 0, rejected: 0, unknownEvents: 0, overflows: 0 };
+  diagnostics() { return { ...this.counts }; }
   push(chunk: string): AnalysisSnapshot[] {
     this.carry += chunk;
-    if (this.carry.length > 262144) { this.carry = ''; throw new Error('Analiz akışı sınırı aşıldı.'); }
+    if (this.carry.length > 262144) { this.counts.overflows++; this.carry = ''; throw new Error('Analiz akışı sınırı aşıldı.'); }
     const parts = this.carry.split(/\r?\n\r?\n/);
     this.carry = parts.pop() ?? '';
     const snapshots: AnalysisSnapshot[] = [];
     for (const part of parts) {
-      let event = ''; const data: string[] = [];
+      let event = ''; let heartbeat = false; const data: string[] = [];
       for (const line of part.split(/\r?\n/)) {
+        if (line.startsWith(':') && line.slice(1).trim() === 'heartbeat') heartbeat = true;
         const index = line.indexOf(':');
         if (index <= 0) continue;
         const field = line.slice(0, index); const value = line.slice(index + 1).replace(/^ /, '');
         if (field === 'event') event = value;
         if (field === 'data') data.push(value);
       }
-      if (event !== 'analysis') continue;
-      try { const snapshot = parseAnalysis(JSON.parse(data.join('\n'))); if (snapshot) snapshots.push(snapshot); }
-      catch { /* Invalid data never becomes user-visible content. */ }
+      if (heartbeat) this.counts.heartbeats++;
+      if (event !== 'analysis') {
+        if (event || data.length) this.counts.unknownEvents++;
+        continue;
+      }
+      let value: unknown;
+      try { value = JSON.parse(data.join('\n')); }
+      catch { this.counts.invalidJson++; continue; }
+      const snapshot = parseAnalysis(value);
+      if (snapshot) { this.counts.accepted++; snapshots.push(snapshot); }
+      else this.counts.rejected++;
     }
     return snapshots;
   }

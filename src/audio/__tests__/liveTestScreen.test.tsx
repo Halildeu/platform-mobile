@@ -20,6 +20,7 @@ let mockFailure: (message: string) => void;
 let mockReady: () => void;
 let mockText: (line: LiveText) => void;
 let mockAnalysis: (snapshot: AnalysisSnapshot) => void;
+let mockAnalysisDiagnostic: ((message: string) => void) | undefined;
 let mockParams: { notificationMeetingId?: string } = {};
 jest.mock('expo-audio', () => ({
   AudioModule: { requestRecordingPermissionsAsync: (...args: unknown[]) => mockPermission(...args) },
@@ -34,8 +35,10 @@ jest.mock('../liveTestApi', () => ({
   restoreSession: jest.fn(), validSession: jest.fn(), logout: jest.fn(), persistedResult: jest.fn(), savedTranscript: jest.fn(),
   BASE_URL: 'https://example.test', CONSENT: 'Test onayı',
 }));
-jest.mock('../../analysis/analysisSubscription', () => ({ subscribeAnalysis: (options: { onSnapshot: typeof mockAnalysis }) => {
-  mockAnalysis = options.onSnapshot; return jest.fn();
+jest.mock('../../analysis/analysisSubscription', () => ({ subscribeAnalysis: (options: { onSnapshot: typeof mockAnalysis; onDiagnostic?: (message: string) => void }) => {
+  mockAnalysis = options.onSnapshot;
+  mockAnalysisDiagnostic = options.onDiagnostic;
+  return () => options.onDiagnostic?.('Canlı analiz akışı: bağlantı=1, bayt=413, heartbeat=1, geçerli=1');
 } }));
 jest.mock('../foregroundStream', () => ({ ForegroundStream: jest.fn().mockImplementation(
   (_socket, _ready, _text, failure) => {
@@ -384,4 +387,21 @@ it('renders successive live decisions and actions while the microphone is still 
   expect(mockStop).not.toHaveBeenCalled(); expect(api.completeCapture).not.toHaveBeenCalled();
   expect(screen.queryByText('Kaydedilmiş toplantı sonucu')).toBeNull();
   await act(async () => mockFailure('Kontrollü test kapanışı'));
+});
+
+it('keeps the synchronous closing analysis counters but rejects late diagnostics after the run ends', async () => {
+  mockPermission.mockResolvedValue({ granted: true });
+  mockDrain.mockResolvedValue(true);
+  const screen = await openAndStart();
+  await act(async () => mockReady());
+  await act(async () => mockAnalysis({ version: 1, partial: true, summary: '', decisions: [], actions: [] }));
+  const previousDiagnostic = mockAnalysisDiagnostic;
+  fireEvent.press(screen.getByText('Durdur'));
+  const stopPrompt = jest.mocked(Alert.alert).mock.calls.find(call => call[0] === 'Kaydı bitir?');
+  await act(async () => stopPrompt?.[2]?.[1].onPress?.());
+  await waitFor(() => expect(api.completeCapture).toHaveBeenCalled());
+  fireEvent.press(screen.getByRole('tab', { name: 'Tanılama' }));
+  expect(screen.getByText(/Canlı analiz akışı: bağlantı=1, bayt=413/)).toBeTruthy();
+  await act(async () => previousDiagnostic?.('LATE_OLD_CONNECTION'));
+  expect(screen.queryByText(/LATE_OLD_CONNECTION/)).toBeNull();
 });

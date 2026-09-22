@@ -6,6 +6,7 @@ export function subscribeAnalysis(options: {
   baseUrl: string; meetingId: string; token: string;
   onSnapshot: (snapshot: AnalysisSnapshot) => void;
   onStatus: (status: string) => void;
+  onDiagnostic?: (message: string) => void;
 }): () => void {
   if (!/^https:\/\/[^/]+$/.test(options.baseUrl) || !/^[0-9a-f-]{36}$/i.test(options.meetingId)) throw new Error('Geçersiz analiz adresi.');
   let stopped = false;
@@ -13,8 +14,20 @@ export function subscribeAnalysis(options: {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let watchdog: ReturnType<typeof setTimeout> | undefined;
   let attempts = 0;
+  let connections = 0;
+  let reportCurrent: (() => void) | undefined;
   async function connect() {
     if (stopped) return;
+    const connectionNumber = ++connections;
+    const parser = new AnalysisEvents();
+    let bytes = 0;
+    let lastReportedAt = Date.now();
+    const report = () => {
+      const counts = parser.diagnostics();
+      options.onDiagnostic?.(`Canlı analiz akışı: bağlantı=${connectionNumber}, bayt=${bytes}, heartbeat=${counts.heartbeats}, geçerli=${counts.accepted}, bozuk JSON=${counts.invalidJson}, sözleşmeye uymayan=${counts.rejected}, bilinmeyen olay=${counts.unknownEvents}, sınır aşımı=${counts.overflows}`);
+      lastReportedAt = Date.now();
+    };
+    reportCurrent = report;
     controller = new AbortController();
     const connection = controller;
     let cause = 'Canlı analiz bağlantısı kesildi';
@@ -43,22 +56,30 @@ export function subscribeAnalysis(options: {
         options.onStatus('Canlı analiz yanıtı beklenen akış biçiminde değil. Sunucu yönlendirmesi kontrol edilmeli.');
         return;
       }
-      const reader = response.body.getReader(); const decoder = new TextDecoder(); const parser = new AnalysisEvents();
+      const reader = response.body.getReader(); const decoder = new TextDecoder();
       options.onStatus('Canlı analiz bağlı; ilk sonuç bekleniyor.');
       try {
         while (!stopped) {
           armTimeout(45000, 'Canlı analiz akışından 45 saniyedir veri veya bağlantı sinyali gelmedi');
           const result = await reader.read(); if (result.done) break;
           if (stopped) break;
+          bytes += result.value.byteLength;
+          const before = parser.diagnostics();
           for (const snapshot of parser.push(decoder.decode(result.value, { stream: true }))) {
             attempts = 0;
             options.onSnapshot(snapshot);
           }
+          const after = parser.diagnostics();
+          if ((after.invalidJson + after.rejected + after.unknownEvents) >
+              (before.invalidJson + before.rejected + before.unknownEvents)) {
+            options.onStatus('Canlı analiz bağlantısında beklenen biçime uymayan veri alındı. Tanılama kaydına işlendi.');
+          }
+          if (Date.now() - lastReportedAt >= 15000) report();
         }
       } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
     } catch {
       // Show only the known stage/status, never a raw server payload.
-    } finally { clearTimeout(watchdog); }
+    } finally { clearTimeout(watchdog); if (!stopped) report(); }
     if (!stopped && ++attempts <= 5) {
       options.onStatus(`${cause}; yeniden bağlanıyor (${attempts}/5).`);
       timer = setTimeout(() => void connect(), Math.min(500 * 2 ** attempts, 10000));
@@ -66,5 +87,12 @@ export function subscribeAnalysis(options: {
     else if (!stopped) options.onStatus(`${cause}. Beş yeniden bağlantı denemesi başarısız oldu.`);
   }
   void connect();
-  return () => { stopped = true; clearTimeout(timer); clearTimeout(watchdog); controller?.abort(); };
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    // Capture final counters synchronously, before the screen invalidates this
+    // recording generation; an asynchronous finally could belong to a new run.
+    reportCurrent?.();
+    clearTimeout(timer); clearTimeout(watchdog); controller?.abort();
+  };
 }

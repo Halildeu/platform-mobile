@@ -141,8 +141,8 @@ export default function LiveTestScreen() {
     finally {
       try { logTransport(connection); } catch { log('Ses tamponu sayaçları okunamadı; kapanış temizliği sürüyor.'); }
       log('Analiz aboneliği istemci tarafından kapatılıyor. Sunucu analiz tetikleme/işleme aşamaları telefon tarafından doğrulanamaz.');
-      generation.current++;
       stopAnalysis.current?.(); stopAnalysis.current = null;
+      generation.current++;
       if (!analysisReceived.current && !failure.current) {
         setAnalysisStatus('Canlı analiz sonucu gelmedi. Tanılama kaydındaki analiz aşamasını sunucu kaydıyla eşleştirin.');
         log(waitedForAnalysis ? 'Canlı analiz sonucu 20 saniyede gelmedi' : 'Eksik kapanış nedeniyle nihai analiz beklenmedi.');
@@ -364,6 +364,7 @@ export default function LiveTestScreen() {
       markStage('Ses bağlantısının açılması');
       analysisReceived.current = false;
       stopAnalysis.current = subscribeAnalysis({ baseUrl: api.BASE_URL, meetingId: selected, token: token.current.jwt,
+        onDiagnostic: (message) => { if (generation.current === run) log(message); },
         onSnapshot: (snapshot) => { if (generation.current === run) { analysisCount.current++; log(`Analiz sonucu alındı: adet=${analysisCount.current}`); analysisReceived.current = true; setAnalysisStatus('Canlı analiz sonucu alındı; yeni sonuçlar geldikçe güncellenecek.'); setAnalysis((previous) => newerAnalysis(previous, snapshot)); } },
         onStatus: (message) => { if (generation.current === run) { setAnalysisStatus(message); setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | Analiz: ${message}`].filter((_, index, all) => index < 3 || index >= all.length - 297)); } },
       });
