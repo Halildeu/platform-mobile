@@ -1,7 +1,7 @@
-import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
+import { act, fireEvent, render, waitFor, within } from '@testing-library/react-native';
 import { SavedSpeakerTranscript } from '../SavedSpeakerTranscript';
 import { normalizeSpeakerName, parseSpeakerLabels, type SpeakerLabels } from '../speakerLabels';
-import type { SavedTranscriptDocument } from '../savedTranscript';
+import { savedTranscriptRows, type SavedTranscriptDocument } from '../savedTranscript';
 import { mobileSession } from '../../auth/mobileSession';
 jest.mock('../../audio/liveTestApi', () => ({ savedSpeakerLabels: jest.fn() }));
 jest.mock('../../auth/mobileSession', () => ({ mobileSession: { contentScope: jest.fn(() => 1) } }));
@@ -94,4 +94,19 @@ test('legacy text and unknown speakers are still readable without a label reques
   const legacy = render(<SavedSpeakerTranscript document={{ ...doc, segments: undefined }} owner={1} api={api} />);
   expect(legacy.getByText(doc.text).props.selectable).toBe(true);
   expect(api).not.toHaveBeenCalled();
+});
+
+test('opens the editor beside the selected speaker and clears it when presentation rows change', async () => {
+  const api = jest.fn().mockResolvedValue(empty);
+  const rows = savedTranscriptRows(doc);
+  const screen = render(<SavedSpeakerTranscript document={doc} owner={1} rows={rows} api={api} />);
+  await waitFor(() => expect(screen.getByLabelText('Konuşmacı 2 adını düzenle')).toBeTruthy());
+  fireEvent.press(screen.getByLabelText('Konuşmacı 2 adını düzenle'));
+  const rowIndex = rows.findIndex(row => row.speakerKey?.speaker === 'S2');
+  expect(within(screen.getByTestId(`saved-transcript-row-${rowIndex}`)).getByLabelText('Konuşmacı adı')).toBeTruthy();
+  expect(within(screen.getByTestId('saved-transcript-row-0')).queryByTestId('speaker-name-editor')).toBeNull();
+  fireEvent.changeText(screen.getByLabelText('Konuşmacı adı'), 'Mehmet');
+  screen.rerender(<SavedSpeakerTranscript document={doc} owner={1} rows={[...rows]} api={api} />);
+  expect(screen.queryByLabelText('Konuşmacı adı')).toBeNull();
+  expect(api.mock.calls.filter(call => call[2])).toHaveLength(0);
 });

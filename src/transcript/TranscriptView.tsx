@@ -11,7 +11,7 @@
  * kaydırdığında bu bozulmaz (manual override) — kullanıcı en alta dönene kadar
  * otomatik kaydırma askıya alınır. Metinler i18next (Türkçe varsayılan).
  */
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactElement } from 'react';
 import {
   FlatList,
   Pressable,
@@ -26,20 +26,32 @@ import { useTranslation } from 'react-i18next';
 import type { TranscriptLine } from './transcriptState';
 import { SpeakerNumbering } from './speakerAttribution';
 
-/** Presentation only: keep original sequence IDs for corrections and replay. */
+/** Anonymous labels are comparable only inside the same audio scope. */
+function singleSpeaker(line: TranscriptLine): string | undefined {
+  const attribution = line.speakerAttribution;
+  const speaker = attribution?.turns[0]?.speaker;
+  if (!speaker || speaker === 'UU' || !attribution?.turns.every(turn => turn.speaker === speaker)) return;
+  return `${attribution.scope}:${speaker}`;
+}
+
+/** Presentation only: keep original sequence IDs for corrections and replay.
+ * A provider's full stop ends a sentence, not necessarily a speaker paragraph.
+ * In particular, do not turn "Zeynep", ".", "Sunum" into three labelled rows.
+ */
 export function transcriptParagraphs(lines: readonly TranscriptLine[]): TranscriptLine[][] {
   const paragraphs: TranscriptLine[][] = [];
   let current: TranscriptLine[] = [];
   let length = 0;
   for (const line of lines) {
-    if (line.speakerAttribution) {
-      if (current.length) paragraphs.push(current);
-      paragraphs.push([line]); current = []; length = 0;
-      continue;
+    const previous = current.at(-1);
+    if (previous && (previous.speakerAttribution || line.speakerAttribution) &&
+        (!singleSpeaker(line) || singleSpeaker(previous) !== singleSpeaker(line))) {
+      paragraphs.push(current);
+      current = []; length = 0;
     }
     current.push(line);
     length += line.text.length;
-    if ((line.status === 'final' || line.status === 'revised') && (/[.!?…][”"')]*$/.test(line.text.trim()) || length >= 400)) {
+    if ((line.status === 'final' || line.status === 'revised') && length >= 400) {
       paragraphs.push(current);
       current = [];
       length = 0;
@@ -51,6 +63,7 @@ export function transcriptParagraphs(lines: readonly TranscriptLine[]): Transcri
 
 export interface TranscriptViewProps {
   lines: readonly TranscriptLine[];
+  header?: ReactElement;
   /** Otomatik-kaydırma özelliğini tümden kapatmak için false. Varsayılan açık. */
   autoScroll?: boolean;
 }
@@ -60,6 +73,7 @@ const STICK_THRESHOLD_PX = 48;
 
 export function TranscriptView({
   lines,
+  header,
   autoScroll = true,
 }: TranscriptViewProps) {
   const { t } = useTranslation();
@@ -85,14 +99,6 @@ export function TranscriptView({
     [],
   );
 
-  if (lines.length === 0) {
-    return (
-      <View style={styles.empty}>
-        <Text style={styles.emptyText}>{t('transcript.waiting')}</Text>
-      </View>
-    );
-  }
-
   return (
     <View style={{ flex: 1 }}>
     {lines.some(line => line.speakerAttribution) && <Text style={styles.speakerTag}>{t('transcript.speakerNotice')}</Text>}
@@ -103,10 +109,13 @@ export function TranscriptView({
       testID="transcript-list"
       ref={listRef}
       data={paragraphs}
+      ListHeaderComponent={header}
+      ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyText}>{t('transcript.waiting')}</Text></View>}
+      keyboardShouldPersistTaps="handled"
       keyExtractor={(paragraph) => String(paragraph[0].seq)}
       contentContainerStyle={styles.content}
       onScroll={onScroll}
-      onContentSizeChange={() => { if (autoScroll && pinnedToBottom) listRef.current?.scrollToEnd({ animated: true }); }}
+      onContentSizeChange={() => { if (lines.length && autoScroll && pinnedToBottom) listRef.current?.scrollToEnd({ animated: true }); }}
       scrollEventThrottle={16}
       renderItem={({ item }) => (
         <View style={styles.row}>
@@ -117,9 +126,13 @@ export function TranscriptView({
                 const speaker = speakers.number(line.speakerAttribution!.scope, turn.speaker);
                 const from = turnIndex === 0 ? 0 : turns[turnIndex - 1].textEnd;
                 const end = turnIndex === turns.length - 1 ? line.text.length : turn.textEnd;
+                const previousTurn = turns[turnIndex - 1];
+                const continued = turn.speaker !== 'UU' && (turnIndex > 0
+                  ? previousTurn.speaker === turn.speaker
+                  : index > 0 && singleSpeaker(item[index - 1]) === singleSpeaker(line) && !!singleSpeaker(line));
                 return <Text key={turnIndex}>
-                  {turnIndex > 0 ? '\n' : ''}
-                  <Text style={styles.speakerTag}>{speaker === undefined ? t('transcript.unknownSpeaker') : t('transcript.speaker', { number: speaker })}: </Text>
+                  {turnIndex > 0 && !continued ? '\n' : ''}
+                  {!continued && <Text style={styles.speakerTag}>{speaker === undefined ? t('transcript.unknownSpeaker') : t('transcript.speaker', { number: speaker })}: </Text>}
                   {line.text.slice(from, end)}
                 </Text>;
               }) : line.text}
@@ -144,6 +157,6 @@ const styles = StyleSheet.create({
   revised: { color: '#e2e8f0' },
   revisedTag: { fontSize: 12, color: '#f59e0b' },
   speakerTag: { fontSize: 13, color: '#93c5fd' },
-  empty: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  empty: { minHeight: 160, alignItems: 'center', justifyContent: 'center' },
   emptyText: { color: '#64748b', fontSize: 14 },
 });

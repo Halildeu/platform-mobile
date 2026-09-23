@@ -19,3 +19,14 @@ test('oversized stream is rejected and malformed metadata is not displayed', () 
   expect(() => new AnalysisEvents().push('x'.repeat(262145))).toThrow();
   expect(parseAnalysis({ ...payload, action_items: [{ text: 'x', owner: {} }] })).toBeNull();
 });
+
+test('diagnostics distinguish heartbeat, malformed JSON, rejected schema and unknown events without payloads', () => {
+  const parser = new AnalysisEvents();
+  const good = 'event: analysis\ndata: ' + JSON.stringify(payload) + '\n\n';
+  expect(parser.push(':heart')).toEqual([]);
+  expect(parser.push('beat\r\n\r\nevent: analysis\ndata: broken-private-text\n\n' +
+    'event: analysis\ndata: {"grounding_policy":"unchecked","secret":"private"}\n\n' +
+    'event: unexpected\ndata: private\n\n' + good)).toEqual([parseAnalysis(payload)]);
+  expect(parser.diagnostics()).toEqual({ heartbeats: 1, accepted: 1, invalidJson: 1, rejected: 1, unknownEvents: 1, overflows: 0 });
+  expect(JSON.stringify(parser.diagnostics())).not.toMatch(/private|unchecked|Karar/);
+});
