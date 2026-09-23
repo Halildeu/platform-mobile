@@ -7,6 +7,30 @@ const scope = '12345678-1234-3234-8234-123456789012';
 const attribution = { scope, turns: [{ speaker: 'S1', textStart: 0, textEnd: 7, startMs: 0, endMs: 400 },
   { speaker: 'UU', textStart: 8, textEnd: 13, startMs: 300, endMs: 900 }] };
 
+test('provider name punctuation never becomes a separate labelled row or changes source words', () => {
+  const words = ['Zeynep', '.', 'Sunum', 'dosyasını', 'hazırlayacak', '.', 'Mehmet', '.', 'Bütçe', 'tablosunu', 'kontrol', 'edecek', '.'];
+  const events = words.map((text, seq) => ({ type: 'final' as const, seq, text,
+    speakerAttribution: { scope, turns: [{ speaker: 'S1', textStart: 0, textEnd: text.length, startMs: 0, endMs: 100 }] },
+  }));
+  const state = events.reduce(applyTranscriptEvent, initialTranscriptState());
+  const source = JSON.stringify(state);
+  const screen = render(<TranscriptView lines={state.lines} />);
+  expect(screen.getAllByText('Speaker 1: ')).toHaveLength(1);
+  expect(screen.getByText('Speaker 1: Zeynep. Sunum dosyasını hazırlayacak. Mehmet. Bütçe tablosunu kontrol edecek.')).toBeTruthy();
+  expect(transcriptParagraphs(state.lines)).toHaveLength(1);
+  expect(JSON.stringify(state)).toBe(source);
+});
+
+test('long speech remains virtualized while keeping words and sequence IDs', () => {
+  const events = Array.from({ length: 200 }, (_, seq) => ({ type: 'final' as const, seq, text: 'kelime',
+    speakerAttribution: { scope, turns: [{ speaker: 'S1', textStart: 0, textEnd: 6, startMs: 0, endMs: 100 }] },
+  }));
+  const state = events.reduce(applyTranscriptEvent, initialTranscriptState());
+  const paragraphs = transcriptParagraphs(state.lines);
+  expect(paragraphs).toHaveLength(3);
+  expect(paragraphs.flat()).toEqual(state.lines);
+});
+
 test('word-level speaker events render one labelled sentence and preserve corrections and scope boundaries', () => {
   const words = ['Mehmet', 'bütçe', 'tablosunu', 'kontrol', 'edecek', '.'];
   const events = words.map((text, seq) => ({ type: 'final' as const, seq, text,

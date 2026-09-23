@@ -7,7 +7,7 @@ it('groups word fragments without losing sequence IDs or revised content', () =>
   const fragments = ['Sunumu', 'Zeynep', 'hazırlayacak.', 'Yarın'].map((text, seq) => ({
     seq, text, confirmed: text, tentative: '', status: 'final' as const,
   }));
-  expect(transcriptParagraphs(fragments).map(p => p.map(line => line.seq))).toEqual([[0, 1, 2], [3]]);
+  expect(transcriptParagraphs(fragments).map(p => p.map(line => line.seq))).toEqual([[0, 1, 2, 3]]);
   const revised = fragments.map(line => line.seq === 1 ? { ...line, text: 'Ayşe', status: 'revised' as const } : line);
   expect(transcriptParagraphs(revised)[0][1].text).toBe('Ayşe');
   expect(fragments[1].text).toBe('Zeynep');

@@ -8,6 +8,7 @@
  */
 import { useEffect, useReducer, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useLocalSearchParams } from 'expo-router';
 
 import type {
   WsFinalEvent,
@@ -42,24 +43,33 @@ const SCRIPT: [number, WsStreamEvent][] = [
   [900, f(3, 'Üçüncü kararımız: Salı saat 14’te değerlendirme toplantısı.')],
 ];
 
+// Reproduce provider-sized finals, including standalone punctuation, in the real renderer.
+const WORD_SCRIPT: [number, WsStreamEvent][] = ['Zeynep', '.', 'Sunum', 'dosyasını', 'hazırlayacak', '.',
+  'Mehmet', '.', 'Bütçe', 'tablosunu', 'kontrol', 'edecek', '.'].map((text, seq) => [150, {
+  ...f(seq, text), speakerAttribution: { scope: '12345678-1234-3234-8234-123456789012',
+    turns: [{ speaker: 'S1', textStart: 0, textEnd: text.length, startMs: 0, endMs: 100 }] },
+}]);
+
 export default function TranscriptDemoScreen() {
   const [run, setRun] = useState(0);
-  return <DemoRun key={run} restart={() => setRun((value) => value + 1)} />;
+  const { scenario } = useLocalSearchParams<{ scenario?: string }>();
+  return <DemoRun key={`${run}-${scenario}`} script={scenario === 'word-fragments' ? WORD_SCRIPT : SCRIPT}
+    restart={() => setRun((value) => value + 1)} />;
 }
 
-function DemoRun({ restart }: { restart: () => void }) {
+function DemoRun({ restart, script }: { restart: () => void; script: [number, WsStreamEvent][] }) {
   const [state, dispatch] = useReducer(applyTranscriptEvent, undefined, initialTranscriptState);
 
   useEffect(() => {
     // her "run" degisiminde bastan oynat
     const timers: ReturnType<typeof setTimeout>[] = [];
     let t = 0;
-    for (const [delay, event] of SCRIPT) {
+    for (const [delay, event] of script) {
       t += delay;
       timers.push(setTimeout(() => dispatch(event), t));
     }
     return () => timers.forEach(clearTimeout);
-  }, []);
+  }, [script]);
 
   return (
     <View style={styles.container}>

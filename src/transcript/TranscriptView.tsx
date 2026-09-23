@@ -34,7 +34,10 @@ function singleSpeaker(line: TranscriptLine): string | undefined {
   return `${attribution.scope}:${speaker}`;
 }
 
-/** Presentation only: keep original sequence IDs for corrections and replay. */
+/** Presentation only: keep original sequence IDs for corrections and replay.
+ * A provider's full stop ends a sentence, not necessarily a speaker paragraph.
+ * In particular, do not turn "Zeynep", ".", "Sunum" into three labelled rows.
+ */
 export function transcriptParagraphs(lines: readonly TranscriptLine[]): TranscriptLine[][] {
   const paragraphs: TranscriptLine[][] = [];
   let current: TranscriptLine[] = [];
@@ -48,7 +51,7 @@ export function transcriptParagraphs(lines: readonly TranscriptLine[]): Transcri
     }
     current.push(line);
     length += line.text.length;
-    if ((line.status === 'final' || line.status === 'revised') && (/[.!?…][”"')]*$/.test(line.text.trim()) || length >= 400)) {
+    if ((line.status === 'final' || line.status === 'revised') && length >= 400) {
       paragraphs.push(current);
       current = [];
       length = 0;
