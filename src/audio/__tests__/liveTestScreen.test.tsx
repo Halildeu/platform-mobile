@@ -1,5 +1,5 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
-import { Alert, AppState } from 'react-native';
+import { Alert, AppState, Share } from 'react-native';
 import LiveTestScreen from '../../../app/live-test';
 import * as api from '../liveTestApi';
 import { clearMeetingViews, saveMeetingView } from '../meetingViewCache';
@@ -386,6 +386,13 @@ it('renders successive live decisions and actions while the microphone is still 
   expect(screen.getByTestId('recording-controls')).toBeTruthy();
   expect(mockStop).not.toHaveBeenCalled(); expect(api.completeCapture).not.toHaveBeenCalled();
   expect(screen.queryByText('Kaydedilmiş toplantı sonucu')).toBeNull();
+  const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: Share.sharedAction });
+  fireEvent.press(screen.getByRole('tab', { name: 'Tanılama' }));
+  fireEvent.press(screen.getByText('Tanılama kaydını paylaş'));
+  const message = (share.mock.calls[0][0] as { message: string }).message;
+  expect(message).toContain('adet=1; sürüm=1; taslak=true; özet karakteri=10; karar=1; aksiyon=1; mikrofon açık=true');
+  expect(message).toContain('adet=2; sürüm=2; taslak=true; özet karakteri=10; karar=1; aksiyon=1; mikrofon açık=true');
+  expect(message).not.toMatch(/Zeynep|Mehmet|Canlı özet|İlk görev|Güncellenmiş görev/);
   await act(async () => mockFailure('Kontrollü test kapanışı'));
 });
 

@@ -26,16 +26,25 @@ import { useTranslation } from 'react-i18next';
 import type { TranscriptLine } from './transcriptState';
 import { SpeakerNumbering } from './speakerAttribution';
 
+/** Anonymous labels are comparable only inside the same audio scope. */
+function singleSpeaker(line: TranscriptLine): string | undefined {
+  const attribution = line.speakerAttribution;
+  const speaker = attribution?.turns[0]?.speaker;
+  if (!speaker || speaker === 'UU' || !attribution?.turns.every(turn => turn.speaker === speaker)) return;
+  return `${attribution.scope}:${speaker}`;
+}
+
 /** Presentation only: keep original sequence IDs for corrections and replay. */
 export function transcriptParagraphs(lines: readonly TranscriptLine[]): TranscriptLine[][] {
   const paragraphs: TranscriptLine[][] = [];
   let current: TranscriptLine[] = [];
   let length = 0;
   for (const line of lines) {
-    if (line.speakerAttribution) {
-      if (current.length) paragraphs.push(current);
-      paragraphs.push([line]); current = []; length = 0;
-      continue;
+    const previous = current.at(-1);
+    if (previous && (previous.speakerAttribution || line.speakerAttribution) &&
+        (!singleSpeaker(line) || singleSpeaker(previous) !== singleSpeaker(line))) {
+      paragraphs.push(current);
+      current = []; length = 0;
     }
     current.push(line);
     length += line.text.length;
@@ -114,9 +123,13 @@ export function TranscriptView({
                 const speaker = speakers.number(line.speakerAttribution!.scope, turn.speaker);
                 const from = turnIndex === 0 ? 0 : turns[turnIndex - 1].textEnd;
                 const end = turnIndex === turns.length - 1 ? line.text.length : turn.textEnd;
+                const previousTurn = turns[turnIndex - 1];
+                const continued = turn.speaker !== 'UU' && (turnIndex > 0
+                  ? previousTurn.speaker === turn.speaker
+                  : index > 0 && singleSpeaker(item[index - 1]) === singleSpeaker(line) && !!singleSpeaker(line));
                 return <Text key={turnIndex}>
-                  {turnIndex > 0 ? '\n' : ''}
-                  <Text style={styles.speakerTag}>{speaker === undefined ? t('transcript.unknownSpeaker') : t('transcript.speaker', { number: speaker })}: </Text>
+                  {turnIndex > 0 && !continued ? '\n' : ''}
+                  {!continued && <Text style={styles.speakerTag}>{speaker === undefined ? t('transcript.unknownSpeaker') : t('transcript.speaker', { number: speaker })}: </Text>}
                   {line.text.slice(from, end)}
                 </Text>;
               }) : line.text}

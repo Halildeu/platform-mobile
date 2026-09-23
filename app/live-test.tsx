@@ -365,7 +365,14 @@ export default function LiveTestScreen() {
       analysisReceived.current = false;
       stopAnalysis.current = subscribeAnalysis({ baseUrl: api.BASE_URL, meetingId: selected, token: token.current.jwt,
         onDiagnostic: (message) => { if (generation.current === run) log(message); },
-        onSnapshot: (snapshot) => { if (generation.current === run) { analysisCount.current++; log(`Analiz sonucu alındı: adet=${analysisCount.current}`); analysisReceived.current = true; setAnalysisStatus('Canlı analiz sonucu alındı; yeni sonuçlar geldikçe güncellenecek.'); setAnalysis((previous) => newerAnalysis(previous, snapshot)); } },
+        onSnapshot: (snapshot) => {
+          if (generation.current !== run) return;
+          analysisCount.current++;
+          log(`Analiz sonucu alındı: adet=${analysisCount.current}; sürüm=${snapshot.version}; taslak=${snapshot.partial}; özet karakteri=${snapshot.summary.length}; karar=${snapshot.decisions.length}; aksiyon=${snapshot.actions.length}; mikrofon açık=${captureStarted.current}`);
+          analysisReceived.current = true;
+          setAnalysisStatus('Canlı analiz sonucu alındı; yeni sonuçlar geldikçe güncellenecek.');
+          setAnalysis((previous) => newerAnalysis(previous, snapshot));
+        },
         onStatus: (message) => { if (generation.current === run) { setAnalysisStatus(message); setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | Analiz: ${message}`].filter((_, index, all) => index < 3 || index >= all.length - 297)); } },
       });
       const NativeWebSocket = WebSocket as unknown as new (url: string, protocols: string[] | undefined, options: { headers: Record<string, string> }) => LiveSocket;
