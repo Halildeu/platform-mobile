@@ -1,5 +1,9 @@
 # ADR 0023 — Account-scoped persistent diagnostic history
 
+The ordinary report described here remains metadata-only. ADR0024 adds a separate,
+explicitly enabled synthetic-test content table and separate export; it does not
+add content to this ordinary report.
+
 The September 25 phone report contains only saved-result reads after re-entry.
 The old meeting view cache is RAM-only, expires after one hour and is cleared
 on login/logout. It cannot preserve earlier microphone/STT/analysis diagnostics.

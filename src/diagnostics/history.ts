@@ -1,4 +1,5 @@
-/** Only allowlisted technical metadata crosses this persistence boundary. */
+import { DetailedCapture, DETAIL_MAX_RETENTION_MS, DETAIL_LIMIT, DETAIL_REPORT_CHARACTERS, type DetailEntry } from './detailedCapture';
+/** The ordinary report persists metadata; explicitly enabled content uses a separate table/export. */
 export const HISTORY_DAYS = 30;
 export const HISTORY_LIMIT = 20000;
 // Stable codes are append-only so previously stored events remain readable.
@@ -39,6 +40,9 @@ export interface HistoryStore {
   read(meeting: string, cutoff: number): { entries: Entry[]; removed: number };
   clear(meeting: string): void;
   close(): void;
+  appendDetail?(entry: DetailEntry, cutoff: number, limit: number): void;
+  readDetails?(meeting: string, cutoff: number): { entries: DetailEntry[]; removed: number };
+  clearDetails?(meeting: string): void;
 }
 export function decodeEntry(raw: string, meeting: string): Entry {
   if (raw.length > 8192) throw new Error('Tanılama kaydı geçersiz.');
@@ -73,6 +77,46 @@ export class DiagnosticHistory {
     catch { this.error = true; } // Diagnostic failure must not terminate live audio.
   }
   failed() { return this.error; }
+  beginDetailed(meeting: string, runId: string, platform: string, retentionMs?: number): DetailedCapture | null {
+    // No implicit durable-content retention. Duration comes from the explicit one-run UI choice.
+    if (this.closed || !UUID.test(meeting) || !UUID.test(runId) || !this.store.appendDetail ||
+      !Number.isSafeInteger(retentionMs) || retentionMs! < 3600000 || retentionMs! > DETAIL_MAX_RETENTION_MS) return null;
+    const expiresAt = this.now() + retentionMs!;
+    return new DetailedCapture((payload, at) => {
+      if (this.closed) return false;
+      if (at >= expiresAt) return false;
+      try { this.store.appendDetail!({ at, expiresAt, meeting, runId, payload }, this.now(), DETAIL_LIMIT); return true; }
+      catch { this.error = true; return false; }
+    }, platform, this.now);
+  }
+  detailedReport(meeting: string): string {
+    if (this.closed || !UUID.test(meeting) || !this.store.readDetails) throw new Error('Ayrıntılı tanılama hazır değil.');
+    const { entries, removed } = this.store.readDetails(meeting, this.now());
+    const lines: string[] = [];
+    let characters = 0;
+    // Keep the newest contiguous evidence; do not construct an unbounded joined report.
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const e = entries[i];
+      const line = `${new Date(e.at).toISOString()} | run=${e.runId} | expires=${new Date(e.expiresAt).toISOString()} | ${JSON.stringify(e.payload)}`;
+      if (characters + line.length + 1 > DETAIL_REPORT_CHARACTERS - 8192) break;
+      lines.push(line); characters += line.length + 1;
+    }
+    lines.reverse();
+    return ['Ayrıntılı mobil test raporu v1 — KONUŞMA METNİ VE KİŞİ ADLARI İÇEREBİLİR', `Toplantı: ${meeting}`,
+      'Yalnız açıkça seçilen denemenin ilk 3 dakikası. Ham ses kaydedilmedi. Seçilen 1 veya 24 saatlik süre / hesap başına 5000 olay ve 2 MiB içerik. Rapor en fazla 524288 karakter.',
+      `Süre/kota nedeniyle kaldırılan ayrıntılı olay (hesap toplamı): ${removed}. truncated=true: alan/karakter sınırında kısaltıldı.`,
+      `Rapor boyut sınırı nedeniyle bu dışa aktarıma alınmayan eski olay: ${entries.length - lines.length}.`,
+      'gateway_text: telefona gelen doğrulanmış metin alanlarıdır; sağlayıcının ham Speechmatics olayı değildir. Partial confirmed/tentative ayrıdır; text gösterim için birleşimdir.',
+      'analysis_output: telefona gelen analizdir. observedAfterFinalSeq yalnız geliş sırasıdır; analizin o metni kullandığını kanıtlamaz. Sunucunun model girdisi ve ret nedenleri bu raporda YOKTUR.',
+      'pcm: uygulamaya ulaşan PCM16 mono 16000Hz sesin 100ms pencereleri; RMS/peak 0–32768 ölçeğinde. firstSample bu denemenin yakalama başlangıcındandır; sağlayıcı sample aralığıyla eşit olduğu varsayılamaz.',
+      'pcm_gap: ölçülmeyen tampon ve biliniyorsa atlanan örnek sayısı. sampleOriginKnown=false sonrasında firstSample mutlak konum olarak kullanılamaz.',
+      'maxCallbackGapMs uygulamaya varış aralığıdır; akustik duraklama değildir. Tam sıfır örnekleri tek başına gürültü kapısını veya nedenini kanıtlamaz. sendAccepted sıraya kabulü gösterir, sağlayıcı teslimi değildir.',
+      ...(this.error ? ['UYARI: Depolama hatası nedeniyle rapor eksik olabilir.'] : []),
+      ...(entries.length ? lines
+        : ['Bu toplantıda saklanmış ayrıntılı test kaydı yok.']),
+    ].join('\n');
+  }
+  clearDetails(meeting: string) { if (!this.closed && UUID.test(meeting)) this.store.clearDetails?.(meeting); }
   report(meeting: string): string {
     if (this.closed || !UUID.test(meeting)) throw new Error('Tanılama oturumu kapalı.');
     const { entries, removed } = this.store.read(meeting, this.cutoff());

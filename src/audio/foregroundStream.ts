@@ -2,7 +2,7 @@ import { encodeGatewayLivePcm16Frame } from './gatewayFrame';
 import { OfflineAudioBuffer } from './offlineBuffer';
 import { readSpeakerAttribution, type SpeakerAttribution } from '../transcript/speakerAttribution';
 
-export interface LiveText { seq: number; text: string; final: boolean; confirmed?: string; tentative?: string; speakerAttribution?: SpeakerAttribution }
+export interface LiveText { seq: number; text: string; final: boolean; confirmed?: string; tentative?: string; speakerAttribution?: SpeakerAttribution; sourceStartSample?: number; sourceEndSample?: number }
 export interface LiveSocket {
   readyState: number;
   bufferedAmount: number;
@@ -289,7 +289,10 @@ export class ForegroundStream {
       } else if (event.type === 'final' && typeof event.text === 'string') {
         this.telemetry.finalEvents++; this.telemetry.lastTextUtc = new Date().toISOString();
         const speakerAttribution = readSpeakerAttribution(event.speakerAttribution, event.text, event.source_start_sample, event.source_end_sample);
+        const validRange = Number.isSafeInteger(event.source_start_sample) && Number.isSafeInteger(event.source_end_sample) &&
+          (event.source_start_sample as number) >= 0 && (event.source_end_sample as number) > (event.source_start_sample as number);
         this.onText({ seq: event.seq as number, text: event.text, final: true,
+          ...(validRange ? { sourceStartSample: event.source_start_sample as number, sourceEndSample: event.source_end_sample as number } : {}),
           ...(speakerAttribution ? { speakerAttribution } : {}) });
       }
     }

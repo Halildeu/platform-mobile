@@ -25,14 +25,39 @@ Retention and known limits: see ADR0023. Expired inactive-account records are
 physically pruned only when that account accesses its history again. Abrupt OS
 termination may prevent the final callback from reaching JavaScript.
 
-## Candidate verification — 2026-09-25
+## Opt-in detailed synthetic test
 
-- Jest: 52 suites, 522 tests passed, including real SQLite reopen/pruning and
-  screen remount, logout/login account isolation, stale callbacks and all startup stages.
+1. Select a TEST meeting. In meeting settings, enable `Sonraki testte ayrıntılı
+   tanılama`, choosing `1 saat sakla ve aç`. Use synthetic names/tasks only.
+2. Start recording. Say one fluent name/task sentence, then a second sentence
+   with a pause after its name. No deliberate microphone/engine setting change.
+3. While recording, inspect live actions, then stop. Tanılama → `Ayrıntılı test
+   raporunu paylaş` should require the separate content-sharing confirmation.
+4. Verify gateway text fragments, partial/final markers, supplied source sample
+   ranges, analysis version/actions/owners, and PCM window/callback measurements.
+   Do not equate callback gaps with spoken pauses or captured sample positions
+   with provider positions. Server model input/rejection reasons remain absent.
+5. Close/reopen and sign out/in to the same account before the chosen expiry.
+   Detailed history must remain. Normal history export must contain no transcript.
+   A second recording must default to detailed capture OFF.
+6. Check separate account/meeting isolation, expiry on access, selected detail
+   deletion, and cancellation of a pending share/erase after leaving the screen.
+7. Repeat on real Android/iOS. This is diagnostic acceptance, not confirmation
+   that punctuation or owner extraction is fixed.
+
+## Candidate verification — 2026-09-25 (detailed extension)
+
+- Jest: 54 suites, 536 tests passed, including real SQLite reopen/pruning,
+  UTF-8 account quota/export bounds, synthetic PCM/sample gaps, one-run consent,
+  screen remount, logout/login account isolation, stale confirmations and callbacks.
 - TypeScript and ESLint passed. Independent Codex review: AGREE after corrections.
 - Android ARM64 release-mode build passed (TEST, local debug signing; not a store release).
 - Expo web export with a fresh Metro cache passed. Browser inspection confirmed
-  the Tanılama panel and unavailable-storage fallback; web is not native storage proof.
+  the detailed panel, content warning and opening a synthetic report. Temporary
+  preview fixture was removed and is excluded from the APK. This is not native
+  storage or Android/iOS acceptance.
 - No Android device was connected to ADB. Physical Android/iOS persistence,
   SQLCipher inspection, Detox/Maestro device acceptance remain open.
 - Shared STT, backend and Electron were not changed. Name punctuation remains open.
+- Broader production retention/policy review remains open (ADR0024); the detailed
+  capability defaults OFF and requires an explicit short synthetic-test choice.

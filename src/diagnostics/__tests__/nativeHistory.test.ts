@@ -6,6 +6,7 @@ import * as SQLite from 'expo-sqlite';
 import * as SecureStore from 'expo-secure-store';
 import { openDiagnosticHistory, SqlDiagnosticStore } from '../nativeHistory';
 import { DiagnosticHistory } from '../history';
+import { DETAIL_STORAGE_BYTES, DETAIL_REPORT_CHARACTERS } from '../detailedCapture';
 
 let mockDirectory: string;
 jest.mock('expo-sqlite', () => ({ get defaultDatabaseDirectory() { return mockDirectory; }, openDatabaseSync: jest.fn() }));
@@ -80,4 +81,52 @@ test('account cap prevents unbounded files and rejects invalid path identities',
   await expect(openDiagnosticHistory(owner)).rejects.toThrow('kapasitesine');
   await expect(openDiagnosticHistory('../bad')).rejects.toThrow();
   expect(existsSync(join(mockDirectory, `diagnostics-${owner}.db`))).toBe(false);
+});
+
+test('keeps opt-in content separate from ordinary reports, survives reopen, expires within 24h and isolates accounts', async () => {
+  const first = await openDiagnosticHistory(owner);
+  expect(first.beginDetailed(meeting, meeting, 'android')).toBeNull();
+  const detailed = first.beginDetailed(meeting, meeting, 'android', 3600000)!;
+  detailed.text({ seq: 1, text: 'PRIVATE_NAME. PRIVATE_TASK', final: true });
+  detailed.stop();
+  expect(first.report(meeting)).not.toContain('PRIVATE');
+  expect(first.detailedReport(meeting)).toContain('PRIVATE_NAME. PRIVATE_TASK');
+  const unfinished = first.beginDetailed(meeting, meeting, 'android', 3600000)!;
+  first.close(); unfinished.text({ seq: 2, text: 'LATE_PRIVATE', final: true });
+  const reopened = await openDiagnosticHistory(owner);
+  expect(reopened.detailedReport(meeting)).toContain('PRIVATE_NAME');
+  expect(reopened.detailedReport(meeting)).not.toContain('LATE_PRIVATE');
+  const foreign = await openDiagnosticHistory(other);
+  expect(foreign.detailedReport(meeting)).not.toContain('PRIVATE_NAME');
+  const db = databases[1];
+  db.prepare('UPDATE detailed_events SET expires_at=?').run(Date.now() - 1);
+  expect(reopened.detailedReport(meeting)).not.toContain('PRIVATE_NAME');
+  expect(db.prepare('SELECT COUNT(*) AS n FROM detailed_events').get()).toEqual({ n: 0 });
+});
+
+test('detailed quota and clearing do not delete ordinary diagnostics', () => {
+  const db = new DatabaseSync(join(mockDirectory, 'fixture.db')); databases.push(db);
+  const store = new SqlDiagnosticStore(adapter(db));
+  store.append({ at: Date.now(), meeting, kind: 'opened', data: {} }, 0, 3);
+  for (let i = 0; i < 4; i++) store.appendDetail({ at: i + 1, expiresAt: 100, meeting, runId: meeting, payload: { kind: 'begin' } }, 0, 3);
+  expect(store.readDetails(meeting, 0)).toMatchObject({ removed: 1, entries: [{ at: 2 }, { at: 3 }, { at: 4 }] });
+  store.clearDetails(meeting);
+  expect(store.read(meeting, 0).entries).toHaveLength(1);
+  expect(store.readDetails(meeting, 0).entries).toHaveLength(0);
+});
+
+test('bounds UTF-8 account content before loading and limits export with explicit omission counts', () => {
+  const db = new DatabaseSync(join(mockDirectory, 'fixture.db')); databases.push(db);
+  const store = new SqlDiagnosticStore(adapter(db));
+  for (let i = 0; i < 150; i++) store.appendDetail({ at: i + 1, expiresAt: 3600000, meeting, runId: meeting,
+    payload: { kind: 'gateway_text', seq: i, text: 'Ş'.repeat(4000), confirmed: 'Ş'.repeat(4000), tentative: 'Ş'.repeat(4000) } }, 0, 5000);
+  const bytes = db.prepare('SELECT SUM(length(CAST(payload AS BLOB))) AS bytes FROM detailed_events').get()!.bytes as number;
+  expect(bytes).toBeLessThanOrEqual(DETAIL_STORAGE_BYTES);
+  const saved = store.readDetails(meeting, 0);
+  expect(saved.removed).toBeGreaterThan(0);
+  expect(saved.entries.at(-1)!.payload.seq).toBe(149);
+  const report = new DiagnosticHistory(store, () => 1000).detailedReport(meeting);
+  expect(report.length).toBeLessThanOrEqual(DETAIL_REPORT_CHARACTERS);
+  expect(report).toMatch(/dışa aktarıma alınmayan eski olay: [1-9]/);
+  expect(report).toContain('"seq":149');
 });

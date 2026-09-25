@@ -11,6 +11,16 @@ function setup(buffer?: OfflineAudioBuffer) {
 beforeEach(() => jest.useFakeTimers());
 afterEach(() => jest.useRealTimers());
 
+test('preserves validated source sample ranges without altering received text or inventing invalid ranges', () => {
+  const { client, event, text } = setup();
+  event({ type: 'ready' });
+  event({ type: 'final', seq: 1, text: 'Zeynep.', source_start_sample: 1600, source_end_sample: 8000 });
+  expect(text).toHaveBeenLastCalledWith({ seq: 1, text: 'Zeynep.', final: true, sourceStartSample: 1600, sourceEndSample: 8000 });
+  event({ type: 'final', seq: 2, text: 'Sunumu hazırlayacak.', source_start_sample: -1, source_end_sample: 5 });
+  expect(text).toHaveBeenLastCalledWith({ seq: 2, text: 'Sunumu hazırlayacak.', final: true });
+  client.dispose();
+});
+
 test('diagnostics distinguish sent frames from receipts and never retain transcript content', async () => {
   const { client, event } = setup(new OfflineAudioBuffer());
   event({ type: 'ready' });
