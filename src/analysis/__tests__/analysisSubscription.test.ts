@@ -1,10 +1,45 @@
 import { fetch as expoFetch } from 'expo/fetch';
 import { subscribeAnalysis } from '../analysisSubscription';
+import { SessionExpired } from '../../auth/sessionManager';
 jest.mock('expo/fetch', () => ({ fetch: jest.fn() }));
 const options = () => ({ baseUrl: 'https://example.test', meetingId: '12345678-1234-1234-1234-123456789012',
-  token: 'test-only', onSnapshot: jest.fn(), onStatus: jest.fn(), onDiagnostic: jest.fn() });
+  getToken: jest.fn(async () => 'test-only'), onSnapshot: jest.fn(), onStatus: jest.fn(), onDiagnostic: jest.fn() });
 beforeEach(() => { jest.clearAllMocks(); jest.useFakeTimers(); });
 afterEach(() => jest.useRealTimers());
+
+it('uses refreshed credentials on reconnect instead of the recording startup token', async () => {
+  const args = options();
+  args.getToken.mockResolvedValueOnce('first').mockResolvedValueOnce('rotated');
+  jest.mocked(expoFetch).mockResolvedValueOnce({ ok: false, status: 503, body: null } as unknown as Awaited<ReturnType<typeof expoFetch>>)
+    .mockResolvedValueOnce({ ok: false, status: 403, body: null } as unknown as Awaited<ReturnType<typeof expoFetch>>);
+  const stop = subscribeAnalysis(args);
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(expoFetch).toHaveBeenNthCalledWith(1, expect.any(String), expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer first' }) }));
+  expect(expoFetch).toHaveBeenNthCalledWith(2, expect.any(String), expect.objectContaining({ headers: expect.objectContaining({ Authorization: 'Bearer rotated' }) }));
+  expect(args.getToken).toHaveBeenCalledTimes(2);
+  stop();
+});
+
+it('does not open a stale stream when refresh completes after unsubscribe', async () => {
+  const args = options();
+  let resolve!: (token: string) => void;
+  args.getToken.mockReturnValue(new Promise(done => { resolve = done; }));
+  const stop = subscribeAnalysis(args);
+  stop(); resolve('late-secret');
+  await jest.advanceTimersByTimeAsync(60000);
+  expect(expoFetch).not.toHaveBeenCalled();
+  expect(args.onSnapshot).not.toHaveBeenCalled();
+});
+
+it('ends the subscription when the session has expired without opening a request', async () => {
+  const args = options(); args.getToken.mockRejectedValue(new SessionExpired());
+  const stop = subscribeAnalysis(args);
+  await jest.advanceTimersByTimeAsync(60000);
+  expect(expoFetch).not.toHaveBeenCalled();
+  expect(args.getToken).toHaveBeenCalledTimes(1);
+  expect(args.onStatus).toHaveBeenLastCalledWith(expect.stringContaining('oturum sona erdi'));
+  stop();
+});
 
 it('does not retry denied access or expose server response content', async () => {
   const args = options();

@@ -1,9 +1,10 @@
 import { fetch as expoFetch } from 'expo/fetch';
 import { AnalysisEvents, type AnalysisSnapshot } from './liveAnalysis';
+import { SessionExpired } from '../auth/sessionManager';
 
 /** Same gateway-fronted SSE path used by platform-desktop. */
 export function subscribeAnalysis(options: {
-  baseUrl: string; meetingId: string; token: string;
+  baseUrl: string; meetingId: string; getToken: () => Promise<string>;
   onSnapshot: (snapshot: AnalysisSnapshot) => void;
   onStatus: (status: string) => void;
   onDiagnostic?: (message: string) => void;
@@ -38,8 +39,12 @@ export function subscribeAnalysis(options: {
     armTimeout(15000, 'Canlı analiz sunucusu 15 saniyede yanıt vermedi');
     options.onStatus('Canlı analiz bağlanıyor…');
     try {
+      const token = await options.getToken();
+      // A refresh may finish after stop, logout, or the handshake deadline.
+      if (stopped) return;
+      if (connection.signal.aborted) throw new Error('Analiz bağlantısı zaman aşımı.');
       const response = await expoFetch(`${options.baseUrl}/api/v1/audio-gateway/meetings/${encodeURIComponent(options.meetingId)}/live-analysis/stream`, {
-        headers: { Authorization: `Bearer ${options.token}`, Accept: 'text/event-stream' }, signal: connection.signal, redirect: 'error',
+        headers: { Authorization: `Bearer ${token}`, Accept: 'text/event-stream' }, signal: connection.signal, redirect: 'error',
       });
       if (stopped) { await response.body?.cancel(); return; }
       if (!response.ok || !response.body) {
@@ -77,7 +82,11 @@ export function subscribeAnalysis(options: {
           if (Date.now() - lastReportedAt >= 15000) report();
         }
       } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
-    } catch {
+    } catch (error) {
+      if (!stopped && error instanceof SessionExpired) {
+        options.onStatus('Canlı analiz için oturum sona erdi. Yeniden giriş yapın.');
+        return;
+      }
       // Show only the known stage/status, never a raw server payload.
     } finally { clearTimeout(watchdog); if (!stopped) report(); }
     if (!stopped && ++attempts <= 5) {

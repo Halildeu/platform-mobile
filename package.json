@@ -4,6 +4,11 @@
   "description": "Meeting Intelligence Mobile Client — React Native + Expo + TypeScript",
   "main": "expo-router/entry",
   "private": true,
+  "expo": {
+    "autolinking": {
+      "android": { "buildFromSource": ["expo-audio"] }
+    }
+  },
   "engines": {
     "node": ">=22.0.0"
   },

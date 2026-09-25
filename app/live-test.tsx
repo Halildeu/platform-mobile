@@ -13,8 +13,8 @@ import Constants from 'expo-constants';
 import { createRecordingBuffer } from '../src/audio/recordingBuffer';
 import * as api from '../src/audio/liveTestApi';
 import { NewMeetingForm } from '../src/audio/NewMeetingForm';
-import { configureBackgroundCapture, supportsBackgroundCapture } from '../src/audio/backgroundCapture';
-import { nativePcmStopReason, PcmStartAttempt } from '../src/audio/pcmLifecycle';
+import { backgroundStopReason, configureBackgroundCapture, listenBackgroundStop, startPcmCapture, supportsBackgroundCapture } from '../src/audio/backgroundCapture';
+import { nativePcmStopReason, PcmStartAttempt, supportsPcmLifecycle, type PcmLifecycleStream } from '../src/audio/pcmLifecycle';
 import { SessionExpired } from '../src/auth/sessionManager';
 import { LiveAnalysisPanel } from '../src/analysis/LiveAnalysisPanel';
 import { newerAnalysis, type AnalysisSnapshot } from '../src/analysis/liveAnalysis';
@@ -57,6 +57,7 @@ export default function LiveTestScreen() {
   const active = useRef(false);
   const permissionPending = useRef(false);
   const failure = useRef<string | null>(null);
+  const lastPcmAt = useRef(0);
   const [diagnostics, setDiagnostics] = useState<string[]>([]);
   const openNotificationMeeting = useEffectEvent((id: string) => {
     if (list.some(meeting => meeting.id === id)) {
@@ -95,6 +96,7 @@ export default function LiveTestScreen() {
   const { stream } = useAudioStream({ sampleRate: 16000, channels: 1, encoding: 'int16',
     onBuffer: (buffer) => {
       if (active.current && captureAttempt.current.acceptsBuffer(buffer as typeof buffer & { captureId?: string }, stream)) {
+        lastPcmAt.current = Date.now();
         live.current?.send(buffer.data, buffer.sampleRate, buffer.channels, Date.now());
       }
     },
@@ -102,13 +104,27 @@ export default function LiveTestScreen() {
 
   async function stop(reason = 'Belirtilmeyen durdurma çağrısı') {
     if (!active.current) return;
+    const lifecycleStream: PcmLifecycleStream = stream;
+    const nativeCaptureId = lifecycleStream.workcubeCaptureId;
+    const readNativeFailure = () => {
+      const terminal = backgroundStopReason(stream) || (supportsPcmLifecycle(stream) && nativeCaptureId &&
+        lifecycleStream.workcubeCaptureId === nativeCaptureId ? lifecycleStream.workcubeLastStopReason : undefined);
+      if (terminal && terminal !== 'requested' && terminal !== 'notification-stop') {
+        failure.current ??= nativePcmStopReason({ isStreaming: false, reason: terminal });
+      }
+    };
+    readNativeFailure();
+    if (captureStarted.current && Date.now() - lastPcmAt.current > 10000) {
+      failure.current ??= 'Mikrofondan 10 saniyedir ses verisi gelmedi; kayıt eksik olarak durduruldu.';
+    }
     active.current = false;
     captureStarted.current = false;
     captureAttempt.current.clear();
     backgroundActive.current = false;
     clearInterval(diagnosticTimer.current);
     log(`Durdurma nedeni: ${reason}`);
-    stream.stop();
+    try { stream.stop(); }
+    catch { failure.current = 'Mikrofonun kapanışı doğrulanamadı; kayıt eksik olarak işaretlendi.'; }
     setRecording(false);
     setBusy(true);
     setStatus('Son sözler bekleniyor…');
@@ -124,7 +140,8 @@ export default function LiveTestScreen() {
       try { drained = !!(await connection?.stop()); }
       catch { log('Ses akışının kapanışı doğrulanamadı; eksiksiz kapanış gönderilmeyecek.'); }
       log(`Ses akışı kapanış sonucu: ${drained ? 'drained doğrulandı' : 'drained doğrulanamadı'}`);
-      let complete = !!drained && !!connection?.completionConfirmed();
+      readNativeFailure();
+      let complete = !failure.current && !!drained && !!connection?.completionConfirmed();
       if (complete) {
         try { await audioBuffer.current?.confirmDrained(); }
         catch { complete = false; log('Kapanış kanıtı cihazda saklanamadı; kayıt eksik olarak korunuyor.'); }
@@ -175,11 +192,25 @@ export default function LiveTestScreen() {
   const stopRef = useRef(stop);
   useEffect(() => { stopRef.current = stop; });
   useEffect(() => {
+    // Expo's web hook has no native PCM SharedObject.
+    if (Platform.OS === 'web') return;
     const listener = stream.addListener?.('audioStreamStatus', (event) => {
       if (active.current && captureAttempt.current.acceptsStop(event, stream, captureStarted.current)) {
-        failure.current = nativePcmStopReason(event);
-        void stopRef.current(failure.current);
+        const reason = backgroundStopReason(stream);
+        if (reason === 'notification-stop') void stopRef.current('Kullanıcı kayıt bildiriminden durdurdu');
+        else {
+          failure.current = nativePcmStopReason(event);
+          void stopRef.current(failure.current);
+        }
       }
+    });
+    return () => listener?.remove();
+  }, [stream]);
+  useEffect(() => {
+    const listener = listenBackgroundStop(stream, reason => {
+      if (!active.current) return;
+      if (reason !== 'notification-stop') failure.current = 'Arka plan kayıt hizmeti durdu; kaydın tamamlandığı doğrulanamadı.';
+      void stopRef.current(reason === 'notification-stop' ? 'Kullanıcı kayıt bildiriminden durdurdu' : 'Arka plan kayıt hizmeti durdu');
     });
     return () => listener?.remove();
   }, [stream]);
@@ -340,7 +371,7 @@ export default function LiveTestScreen() {
       if (AppState.currentState === 'background') throw new Error('Teste başlamak için uygulamayı ön planda tutun.');
       markStage('Kayıt bildirimi');
       permissionPending.current = true;
-      try { await configureBackgroundCapture(background, stream); }
+      try { await configureBackgroundCapture(background, stream, () => generation.current === run && active.current); }
       finally { permissionPending.current = false; }
       if (generation.current !== run) return;
       if (['background'].includes(AppState.currentState)) throw new Error('Kaydı başlatmak için uygulamaya dönün.');
@@ -363,7 +394,13 @@ export default function LiveTestScreen() {
       log(preparedBuffer.mode === 'memory' ? 'Kalıcı ses tamponu kapalı: saklama süresi tanımlanmadı.' : 'Şifreli ses tamponu hazır.');
       markStage('Ses bağlantısının açılması');
       analysisReceived.current = false;
-      stopAnalysis.current = subscribeAnalysis({ baseUrl: api.BASE_URL, meetingId: selected, token: token.current.jwt,
+      stopAnalysis.current = subscribeAnalysis({ baseUrl: api.BASE_URL, meetingId: selected,
+        getToken: async () => {
+          const refreshed = await api.validSession(30000);
+          if (generation.current !== run) throw new SessionExpired();
+          token.current = refreshed;
+          return refreshed.jwt;
+        },
         onDiagnostic: (message) => { if (generation.current === run) log(message); },
         onSnapshot: (snapshot) => {
           if (generation.current !== run) return;
@@ -382,7 +419,7 @@ export default function LiveTestScreen() {
         if (generation.current !== run || !active.current) return;
         markStage('Sunucu hazır; mikrofon başlatılıyor');
         captureAttempt.current.request(stream);
-        void stream.start().then(() => {
+        void startPcmCapture(stream, background).then(() => {
           if (generation.current !== run || !active.current) { stream.stop(); return; }
           if (stream.sampleRate !== 16000 || stream.channels !== 1) throw new Error('Desteklenmeyen mikrofon biçimi.');
           if (!stream.isStreaming) {
@@ -391,11 +428,18 @@ export default function LiveTestScreen() {
             return;
           }
           captureStarted.current = true;
+          lastPcmAt.current = Date.now();
           backgroundActive.current = background;
           setRecording(true); setBusy(false); setStatus('Dinleniyor — konuşabilirsiniz. Bitirmek için Durdur düğmesine basın.');
           setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | Mikrofon başladı`].filter((_, index, all) => index < 3 || index >= all.length - 297));
           log('Mikrofon açık; otomatik süre sınırı yok');
-          diagnosticTimer.current = setInterval(() => logTransport(live.current), 10000);
+          diagnosticTimer.current = setInterval(() => {
+            logTransport(live.current);
+            if (active.current && captureStarted.current && Date.now() - lastPcmAt.current > 10000) {
+              failure.current = 'Mikrofondan 10 saniyedir ses verisi gelmedi; kayıt eksik olarak durduruldu.';
+              void stopRef.current('Mikrofon veri akışı kesildi');
+            }
+          }, 10000);
         }).catch(() => {
           if (generation.current !== run || !active.current) return;
           failure.current = 'Mikrofon başlatılamadı veya gerekli 16 kHz mono ses biçimi sağlanamadı.';

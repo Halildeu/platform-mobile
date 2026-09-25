@@ -1,10 +1,11 @@
 import { useEffect } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import { sweepAudioBuffers } from './nativeBufferJournal';
 
 /** App-wide: expired storage must not depend on reopening the recording screen. */
 export function useAudioBufferCleanup() {
   useEffect(() => {
+    if (Platform.OS === 'web') return; // The encrypted native journal is not available in preview.
     let mounted = true;
     const sweep = () => {
       if (AppState.currentState !== 'active') return;

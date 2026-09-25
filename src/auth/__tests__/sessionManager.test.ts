@@ -62,6 +62,29 @@ it('coalesces concurrent refresh and persists the rotated credential', async () 
   expect(results.every((item) => item?.jwt === 'new')).toBe(true);
   expect(JSON.parse(stored()!).refreshToken).toBe('rotated');
 });
+
+it('retries storage after rotation without ever reusing the consumed refresh token', async () => {
+  const { io, manager, stored } = setup();
+  await manager.save(expired);
+  io.write.mockRejectedValueOnce(new Error('storage temporarily unavailable'));
+  await expect(manager.valid()).rejects.toBeInstanceOf(SessionUnavailable);
+  expect(manager.snapshot()?.jwt).toBe('new');
+  expect((await manager.valid())?.jwt).toBe('new');
+  expect(io.refresh.mock.calls).toEqual([['refresh']]);
+  expect(JSON.parse(stored()!).refreshToken).toBe('rotated');
+});
+
+it('does not restore pending rotation after logout or another account replaces it', async () => {
+  const { io, manager, stored } = setup();
+  await manager.save(expired);
+  io.write.mockRejectedValueOnce(new Error('storage temporarily unavailable'));
+  await expect(manager.valid()).rejects.toBeInstanceOf(SessionUnavailable);
+  await manager.clear();
+  await manager.save({ jwt: 'other', expiresAt: 500000, refreshToken: 'other-refresh' });
+  expect((await manager.valid())?.jwt).toBe('other');
+  expect(JSON.parse(stored()!).refreshToken).toBe('other-refresh');
+  expect(io.refresh).toHaveBeenCalledTimes(1);
+});
 it('cannot resurrect an account when refresh returns after logout', async () => {
   const { io, manager, stored } = setup();
   await manager.save(expired);

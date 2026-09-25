@@ -33,7 +33,7 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts/detox
           cd android
-          ./gradlew :app:assembleRelease :app:assembleReleaseAndroidTest -PreactNativeArchitectures=x86_64 '-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=1536m -Dfile.encoding=UTF-8' -Dorg.gradle.parallel=false --no-daemon --max-workers=1 2>&1 | tee ../artifacts/detox/build.log
+          ./gradlew :workcube-pcm-background:testDebugUnitTest :app:assembleRelease :app:assembleReleaseAndroidTest -PreactNativeArchitectures=x86_64 '-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=1536m -Dfile.encoding=UTF-8' -Dorg.gradle.parallel=false --no-daemon --max-workers=1 2>&1 | tee ../artifacts/detox/build.log
       - run: node scripts/detox-artifacts.cjs seal android "$(git rev-parse HEAD)"
       - uses: actions/upload-artifact@v4
         if: always()

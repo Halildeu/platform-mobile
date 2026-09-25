@@ -1,5 +1,5 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
-import { Alert, AppState, Share } from 'react-native';
+import { Alert, AppState, Platform, Share } from 'react-native';
 import LiveTestScreen from '../../../app/live-test';
 import * as api from '../liveTestApi';
 import { clearMeetingViews, saveMeetingView } from '../meetingViewCache';
@@ -8,7 +8,9 @@ import type { AnalysisSnapshot } from '../../analysis/liveAnalysis';
 
 const mockStart = jest.fn().mockResolvedValue(undefined);
 const mockStop = jest.fn();
+let mockWebStream = false;
 let mockStatusListener: (event: { isStreaming: boolean; captureId?: string; reason?: string }) => void;
+let mockBuffer: (buffer: { data: ArrayBuffer; sampleRate: number; channels: number }) => void;
 const mockStream = {
   start: mockStart, stop: mockStop, sampleRate: 16000, channels: 1, isStreaming: true,
   workcubeCaptureId: '', workcubeLastStopReason: '', workcubePcmLifecycleVersion: 0, configureBackgroundCapture: jest.fn(),
@@ -24,10 +26,15 @@ let mockAnalysisDiagnostic: ((message: string) => void) | undefined;
 let mockParams: { notificationMeetingId?: string } = {};
 jest.mock('expo-audio', () => ({
   AudioModule: { requestRecordingPermissionsAsync: (...args: unknown[]) => mockPermission(...args) },
-  useAudioStream: () => ({ stream: mockStream }),
+  useAudioStream: (options: { onBuffer: typeof mockBuffer }) => { mockBuffer = options.onBuffer; return { stream: mockWebStream ? null : mockStream }; },
 }));
 jest.mock('expo-router', () => ({ useLocalSearchParams: () => mockParams }));
-jest.mock('../backgroundCapture', () => ({ supportsBackgroundCapture: () => false, configureBackgroundCapture: jest.fn(async () => {}) }));
+let mockBackgroundStop: (reason: string) => void;
+let mockBackgroundReason: string | undefined;
+jest.mock('../backgroundCapture', () => ({ supportsBackgroundCapture: () => false, configureBackgroundCapture: jest.fn(async () => {}),
+  startPcmCapture: () => mockStart(), backgroundStopReason: () => mockBackgroundReason,
+  listenBackgroundStop: (_stream: unknown, callback: (reason: string) => void) => { mockBackgroundStop = callback; return { remove: jest.fn() }; },
+}));
 jest.mock('expo-web-browser', () => ({ maybeCompleteAuthSession: jest.fn() }));
 jest.mock('../../auth/mobileSession', () => ({ mobileSession: { contentScope: () => 1, snapshot: () => null } }));
 jest.mock('../liveTestApi', () => ({
@@ -45,7 +52,7 @@ jest.mock('../foregroundStream', () => ({ ForegroundStream: jest.fn().mockImplem
     mockFailure = failure;
     mockReady = _ready;
     mockText = _text;
-    return { stop: mockDrain, dispose: jest.fn(), completionConfirmed: () => true, diagnostics: () => ({}) };
+    return { send: jest.fn(), stop: mockDrain, dispose: jest.fn(), completionConfirmed: () => true, diagnostics: () => ({}) };
   }),
 }));
 
@@ -53,6 +60,8 @@ beforeEach(() => {
   jest.clearAllMocks();
   clearMeetingViews();
   mockParams = {};
+  mockWebStream = false;
+  mockBackgroundReason = undefined;
   Object.assign(mockStream, { isStreaming: true, workcubeCaptureId: '', workcubeLastStopReason: '', workcubePcmLifecycleVersion: 0 });
   mockStart.mockResolvedValue(undefined);
   mockDrain.mockResolvedValue(false);
@@ -66,6 +75,16 @@ beforeEach(() => {
   Object.defineProperty(AppState, 'currentState', { configurable: true, value: 'active' });
 });
 afterEach(() => jest.restoreAllMocks());
+
+it('opens the web preview when Expo exposes no native PCM stream', async () => {
+  jest.replaceProperty(Platform, 'OS', 'web');
+  mockWebStream = true;
+  const screen = render(<LiveTestScreen />);
+  await act(async () => {});
+  expect(screen.getByText('Giriş yap')).toBeTruthy();
+  expect(mockStream.addListener).not.toHaveBeenCalled();
+  screen.unmount();
+});
 
 async function openAndStart() {
   const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
@@ -113,6 +132,69 @@ it('keeps the connection failure visible after asynchronous cleanup', async () =
   expect(screen.queryByText('Test durdu; son sözlerin tamamlandığı doğrulanamadı.')).toBeNull();
 });
 
+it('never confirms a damaged native capture even when earlier audio drains successfully', async () => {
+  mockPermission.mockResolvedValue({ granted: true });
+  mockDrain.mockResolvedValue(true);
+  const screen = await openAndStart();
+  await act(async () => { mockReady(); });
+  await act(async () => { mockStatusListener({ isStreaming: false, reason: 'conversion-failed' }); });
+  expect(api.completeCapture).toHaveBeenCalledWith('test-only', 'session-1', false);
+  expect(screen.getByText('Mikrofon sesi gerekli biçime dönüştürülemedi; kayıt durduruldu.')).toBeTruthy();
+  expect(screen.queryByText('Test bitti. Ekrandaki metni konuşmanızla karşılaştırabilirsiniz.')).toBeNull();
+});
+
+it('reads a native failure even before its status event is delivered', async () => {
+  mockPermission.mockResolvedValue({ granted: true }); mockDrain.mockResolvedValue(true);
+  const screen = await openAndStart();
+  await act(async () => { mockReady(); });
+  Object.assign(mockStream, { workcubePcmLifecycleVersion: 1, workcubeCaptureId: 'capture-current',
+    workcubeLastStopReason: 'conversion-failed', isStreaming: false });
+  fireEvent.press(screen.getByText('Durdur'));
+  await act(async () => { jest.mocked(Alert.alert).mock.calls.at(-1)?.[2]?.[1].onPress?.(); });
+  expect(api.completeCapture).toHaveBeenCalledWith('test-only', 'session-1', false);
+  expect(screen.getByText('Mikrofon sesi gerekli biçime dönüştürülemedi; kayıt durduruldu.')).toBeTruthy();
+});
+
+it('fails incomplete when PCM stops arriving even though the native stream still reports running', async () => {
+  mockPermission.mockResolvedValue({ granted: true }); mockDrain.mockResolvedValue(true);
+  const screen = await openAndStart();
+  jest.useFakeTimers();
+  try {
+    await act(async () => { mockReady(); });
+    await act(async () => { jest.advanceTimersByTime(20000); });
+    expect(api.completeCapture).toHaveBeenCalledWith('test-only', 'session-1', false);
+    expect(screen.getByText('Mikrofondan 10 saniyedir ses verisi gelmedi; kayıt eksik olarak durduruldu.')).toBeTruthy();
+  } finally { jest.useRealTimers(); }
+});
+
+it('honors native notification stop without treating the user action as an audio failure', async () => {
+  mockPermission.mockResolvedValue({ granted: true });
+  mockDrain.mockResolvedValue(true);
+  const screen = await openAndStart();
+  await act(async () => { mockReady(); });
+  await act(async () => { mockAnalysis({ version: 1, partial: true, summary: '', decisions: [], actions: [] }); });
+  mockBackgroundReason = 'notification-stop';
+  await act(async () => {
+    mockStatusListener({ isStreaming: false });
+    mockBackgroundStop('notification-stop');
+  });
+  expect(api.completeCapture).toHaveBeenCalledTimes(1);
+  expect(api.completeCapture).toHaveBeenCalledWith('test-only', 'session-1', true);
+  expect(screen.getByText('Test bitti. Ekrandaki metni konuşmanızla karşılaştırabilirsiniz.')).toBeTruthy();
+});
+
+it('still closes the connection as incomplete if stopping the microphone throws', async () => {
+  mockPermission.mockResolvedValue({ granted: true });
+  mockDrain.mockResolvedValue(true);
+  const screen = await openAndStart();
+  await act(async () => { mockReady(); });
+  mockStop.mockImplementationOnce(() => { throw new Error('native stop failed'); });
+  fireEvent.press(screen.getByText('Durdur'));
+  await act(async () => { jest.mocked(Alert.alert).mock.calls.at(-1)?.[2]?.[1].onPress?.(); });
+  expect(api.completeCapture).toHaveBeenCalledWith('test-only', 'session-1', false);
+  expect(screen.getByText('Mikrofonun kapanışı doğrulanamadı; kayıt eksik olarak işaretlendi.')).toBeTruthy();
+});
+
 it('does not show successful stop when finish validation fails after a drained stream', async () => {
   mockPermission.mockResolvedValue({ granted: true });
   mockDrain.mockResolvedValue(true);
@@ -154,7 +236,12 @@ it('keeps recording beyond the former 60 second limit', async () => {
   jest.useFakeTimers();
   try {
     await act(async () => { mockReady(); });
-    await act(async () => { jest.advanceTimersByTime(120000); });
+    await act(async () => {
+      for (let i = 0; i < 120; i++) {
+        mockBuffer({ data: new ArrayBuffer(3200), sampleRate: 16000, channels: 1 });
+        jest.advanceTimersByTime(1000);
+      }
+    });
     expect(mockStop).not.toHaveBeenCalled();
     expect(mockDrain).not.toHaveBeenCalled();
     expect(screen.getByText('Dinleniyor — konuşabilirsiniz. Bitirmek için Durdur düğmesine basın.')).toBeTruthy();
