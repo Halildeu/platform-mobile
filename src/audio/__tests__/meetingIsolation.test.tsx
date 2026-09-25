@@ -9,7 +9,9 @@ let mockSnapshot: (snapshot: object) => void;
 const mockStream = { start: jest.fn(async () => {}), stop: jest.fn(), sampleRate: 16000, channels: 1, isStreaming: true };
 jest.mock('expo-audio', () => ({ AudioModule: { requestRecordingPermissionsAsync: async () => ({ granted: true }) }, useAudioStream: () => ({ stream: mockStream }) }));
 jest.mock('expo-router', () => ({ useLocalSearchParams: () => ({}) }));
-jest.mock('../backgroundCapture', () => ({ supportsBackgroundCapture: () => false, configureBackgroundCapture: async () => {} }));
+jest.mock('../backgroundCapture', () => ({ supportsBackgroundCapture: () => false, configureBackgroundCapture: async () => {},
+  startPcmCapture: () => mockStream.start(), backgroundStopReason: () => undefined, listenBackgroundStop: () => undefined,
+}));
 jest.mock('expo-web-browser', () => ({ maybeCompleteAuthSession: jest.fn() }));
 jest.mock('../liveTestApi', () => ({ login: jest.fn(), meetings: jest.fn(), begin: jest.fn(), finish: jest.fn(), completeCapture: jest.fn(), captureStopped: jest.fn(), pendingRecording: jest.fn(async () => null), abandonRecording: jest.fn(), restoreSession: jest.fn(), validSession: jest.fn(), logout: jest.fn(), BASE_URL: 'https://example.test', CONSENT: 'Synthetic consent' }));
 jest.mock('../../transcript/TranscriptView', () => ({ TranscriptView: ({ lines, header }: { lines: { text: string }[]; header?: ReactNode }) => <>{header}<MockText>{lines.map(l => l.text).join(' ')}</MockText></> }));
