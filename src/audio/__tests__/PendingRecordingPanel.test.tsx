@@ -39,3 +39,33 @@ test('failed release retains the pending operation and does not send an abandon'
   await act(async () => { fireEvent.press(screen.getByText('Kapanışı tekrar kontrol et')); });
   expect(screen.getByText('Tampon kapanmadı')).toBeTruthy(); expect(api.abandonRecording).not.toHaveBeenCalled();
 });
+
+test('late pending read for a previously selected meeting cannot replace the current recovery target', async () => {
+  type Pending = Awaited<ReturnType<typeof api.pendingRecording>>;
+  let resolveA!: (value: Pending) => void;
+  let resolveB!: (value: Pending) => void;
+  jest.mocked(api.pendingRecording).mockImplementation((_jwt, meeting) => new Promise(resolve => {
+    if (meeting === 'A') resolveA = resolve; else resolveB = resolve;
+  }));
+  const screen = render(<PendingRecordingPanel meetingId="A" beforeResolve={async () => {}} />);
+  await waitFor(() => expect(api.pendingRecording).toHaveBeenCalledWith('owner', 'A'));
+  screen.rerender(<PendingRecordingPanel meetingId="B" beforeResolve={async () => {}} />);
+  await waitFor(() => expect(api.pendingRecording).toHaveBeenCalledWith('owner', 'B'));
+  await act(async () => resolveB({ meetingId: 'B', sessionId: 'SES-B', incomplete: false, abandoning: false }));
+  await act(async () => resolveA({ meetingId: 'A', sessionId: 'SES-A', incomplete: false, abandoning: false }));
+  await act(async () => fireEvent.press(screen.getByText('Kapanışı tekrar kontrol et')));
+  expect(api.finish).toHaveBeenCalledWith('owner', 'SES-B');
+});
+
+test('leaving during native release cancels the old separate-meeting confirmation', async () => {
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  let released!: () => void;
+  const separate = jest.fn(async () => {});
+  const screen = render(<PendingRecordingPanel onSeparateMeeting={separate} beforeResolve={() => new Promise(resolve => { released = resolve; })} />);
+  await waitFor(() => expect(screen.getByText('Önceki kaydı koru, yeni toplantı aç')).toBeTruthy());
+  fireEvent.press(screen.getByText('Önceki kaydı koru, yeni toplantı aç'));
+  await act(async () => alert.mock.calls.at(-1)?.[2]?.[1].onPress?.());
+  screen.unmount();
+  await act(async () => released());
+  expect(separate).not.toHaveBeenCalled();
+});

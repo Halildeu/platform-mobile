@@ -13,8 +13,6 @@ import Constants from 'expo-constants';
 import { DiagnosticHistory, diagnosticStage, type DiagnosticKind, type Details } from '../src/diagnostics/history';
 import { messageEvent } from '../src/diagnostics/messageEvent';
 import { HistoryPanel } from '../src/diagnostics/HistoryPanel';
-import { DetailedReportPanel } from '../src/diagnostics/DetailedReportPanel';
-import type { DetailedCapture } from '../src/diagnostics/detailedCapture';
 import { openAccountHistory } from '../src/diagnostics/openAccountHistory';
 import { diagnosticFailureCode, type DiagnosticFailureCode } from '../src/diagnostics/openFailure';
 import { createRecordingBuffer } from '../src/audio/recordingBuffer';
@@ -72,12 +70,9 @@ export default function LiveTestScreen() {
   const historyHandle = useRef<DiagnosticHistory | null>(null);
   const authGeneration = useRef(0);
   const currentRun = useRef<string | undefined>(undefined);
-  const detailed = useRef<DetailedCapture | null>(null);
-  const [detailFor, setDetailFor] = useState<{ history: DiagnosticHistory; meeting: string; retentionMs: number } | null>(null);
-  const [detailNotice, setDetailNotice] = useState('');
+  const separateMeeting = useRef<string | undefined>(undefined);
   function closeHistory() {
-    detailed.current?.stop('closed'); detailed.current = null; setDetailFor(null);
-    setDetailNotice('');
+    separateMeeting.current = undefined;
     const previous = historyHandle.current;
     historyHandle.current = null;
     try { previous?.close(); } catch { /* Closed handles reject subsequent reads/writes. */ }
@@ -150,13 +145,7 @@ export default function LiveTestScreen() {
     onBuffer: (buffer) => {
       if (active.current && captureAttempt.current.acceptsBuffer(buffer as typeof buffer & { captureId?: string }, stream)) {
         lastPcmAt.current = Date.now();
-        const connection = live.current;
-        const accepted = connection?.send(buffer.data, buffer.sampleRate, buffer.channels, Date.now()) ?? false;
-        if (detailed.current) {
-          const counters = connection?.diagnostics();
-          detailed.current.pcm(buffer.data, buffer.sampleRate, buffer.channels, Date.now(), accepted,
-            { generatedFrames: counters?.generatedFrames, lastSentSeq: counters?.lastSentSeq, lastAckSeq: counters?.lastAckSeq });
-        }
+        live.current?.send(buffer.data, buffer.sampleRate, buffer.channels, Date.now());
       }
     },
   });
@@ -189,7 +178,6 @@ export default function LiveTestScreen() {
     try { stream.stop(); }
     catch { failure.current = 'Mikrofonun kapanışı doğrulanamadı; kayıt eksik olarak işaretlendi.'; }
     record('capture_stopped', { runId: currentRun.current, sessionId: session.current, microphoneOpen: !!stream.isStreaming, success: !failure.current && !stream.isStreaming });
-    detailed.current?.draining();
     setRecording(false);
     setBusy(true);
     setStatus('Son sözler bekleniyor…');
@@ -211,7 +199,7 @@ export default function LiveTestScreen() {
         try { await audioBuffer.current?.confirmDrained(); }
         catch { complete = false; log('Kapanış kanıtı cihazda saklanamadı; kayıt eksik olarak korunuyor.'); }
       }
-      if (id && token.current) { log('HTTP kayıt kapanışı başlatıldı'); token.current = await api.validSession(15000); const closed = await api.completeCapture(token.current.jwt, id, complete); log(closed ? 'HTTP kayıt kapanışı: FINISHED yanıtı doğrulandı' : 'Kayıt eksik; sunucuya tamamlandı gönderilmedi.'); }
+      if (id && token.current) { log('HTTP kayıt kapanışı başlatıldı'); const closed = await api.completeCapture(token.current.jwt, id, complete); log(closed ? 'HTTP kayıt kapanışı: FINISHED yanıtı doğrulandı' : 'Kayıt eksik; sunucuya tamamlandı gönderilmedi.'); }
       if (complete && !failure.current && stopAnalysis.current && !analysisReceived.current) {
         waitedForAnalysis = true;
         setStatus('Ses kaydı bitti; analiz sonucu en fazla 20 saniye bekleniyor…');
@@ -224,7 +212,6 @@ export default function LiveTestScreen() {
       try { logTransport(connection); } catch { log('Ses tamponu sayaçları okunamadı; kapanış temizliği sürüyor.'); }
       log('Analiz aboneliği istemci tarafından kapatılıyor. Sunucu analiz tetikleme/işleme aşamaları telefon tarafından doğrulanamaz.');
       stopAnalysis.current?.(); stopAnalysis.current = null;
-      detailed.current?.stop(); detailed.current = null;
       generation.current++;
       if (!analysisReceived.current && !failure.current) {
         setAnalysisStatus('Canlı analiz sonucu gelmedi. Tanılama kaydındaki analiz aşamasını sunucu kaydıyla eşleştirin.');
@@ -403,8 +390,6 @@ export default function LiveTestScreen() {
 
   function selectMeeting(id: string | undefined) {
     if (id === selected) return;
-    setDetailFor(null);
-    setDetailNotice('');
     generation.current++;
     currentRun.current = undefined;
     try { history?.record(id, 'opened', { platform: Platform.OS, appVersion: Constants.expoConfig?.version }); }
@@ -431,6 +416,29 @@ export default function LiveTestScreen() {
     } finally { setBusy(false); }
   }
 
+  async function openSeparateMeeting() {
+    if (active.current || busy || recording) throw new Error('Önce mevcut kaydı durdurun.');
+    if (stream?.isStreaming) throw new Error('Mikrofon henüz kapanmadı. Kaydı durdurduktan sonra yeniden deneyin.');
+    const ownerGeneration = authGeneration.current;
+    setBusy(true);
+    try {
+      if (audioBuffer.current) { await audioBuffer.current.release(); audioBuffer.current = null; }
+      const current = await api.validSession(30000);
+      if (ownerGeneration !== authGeneration.current) throw new Error('Oturum değişti.');
+      const meeting = await api.createMeeting(current.jwt, `Yeni toplantı ${new Date().toLocaleString('tr-TR')}`);
+      if (ownerGeneration !== authGeneration.current) return;
+      token.current = current;
+      separateMeeting.current = meeting.id;
+      setList(previous => [meeting, ...previous.filter(item => item.id !== meeting.id)]);
+      selectMeeting(meeting.id);
+      setCurrentCapture(true); setTab('text'); setSetup(false);
+      setStatus('Yeni toplantı hazır. Önceki kaydın kapanış bilgisi korunuyor. Konuşma testini başlatabilirsiniz.');
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : 'Yeni toplantı açılamadı.');
+      throw error;
+    } finally { setBusy(false); }
+  }
+
   async function start() {
     if (Platform.OS === 'web') { setStatus('Bu testi Android veya iOS uygulamasında açın.'); return; }
     if (active.current || !selected || !token.current) return;
@@ -438,10 +446,6 @@ export default function LiveTestScreen() {
     failure.current = null;
     analysisCount.current = 0;
     currentRun.current = undefined;
-    const detailRequested = !!history && detailFor?.history === history && detailFor.meeting === selected;
-    setDetailFor(null); // Consent is consumed even if permission or server startup fails.
-    detailed.current = null;
-    setDetailNotice('');
     setDiagnostics([]);
     const run = ++generation.current;
     setCurrentCapture(true);
@@ -453,17 +457,7 @@ export default function LiveTestScreen() {
     try {
       try { currentRun.current = Crypto.randomUUID(); }
       catch { throw new Error('Kayıt hazırlığı tamamlanamadı. İnceleme kodu: START_ID. Yeniden deneyebilirsiniz.'); }
-      setDiagnostics([`Mobil tanılama v3 | Deneme: ${currentRun.current} | UTC: ${new Date().toISOString()} | Toplantı: ${selected}`, 'Standart teknik rapor konuşma içeriği içermez. Ayrıntılı test raporu ayrı paylaşılır. Uygulama zorla kapatılırsa son olay kaydedilemeyebilir.']);
-      if (detailRequested) {
-        try { detailed.current = history!.beginDetailed(selected, currentRun.current, Platform.OS, detailFor!.retentionMs); }
-        catch { setHistoryFailure(true); }
-        const notice = detailed.current
-          ? 'Ayrıntılı tanılama bu deneme için açıldı. İlk 3 dakikanın test verileri kaydedilecek.'
-          : 'Ayrıntılı tanılama açılamadı; ses kaydı başlatılmaya devam ediliyor. Bu denemede ayrıntılı rapor oluşmayacak. İnceleme kodu: DETAIL_START.';
-        setDetailNotice(notice);
-        log(notice);
-        record(detailed.current ? 'detail_started' : 'detail_failed', { runId: currentRun.current });
-      }
+      setDiagnostics([`Mobil tanılama v3 | Deneme: ${currentRun.current} | UTC: ${new Date().toISOString()} | Toplantı: ${selected}`, 'Standart teknik rapor konuşma içeriği içermez. Uygulama zorla kapatılırsa son olay kaydedilemeyebilir.']);
       record('run_started', { runId: currentRun.current, background, platform: Platform.OS, appVersion: Constants.expoConfig?.version });
       markStage('Mikrofon izni');
       if (audioBuffer.current) { await audioBuffer.current.release(); audioBuffer.current = null; }
@@ -487,10 +481,9 @@ export default function LiveTestScreen() {
       finally { permissionPending.current = false; }
       if (generation.current !== run) return;
       if (['background'].includes(AppState.currentState)) throw new Error('Kaydı başlatmak için uygulamaya dönün.');
-      const id = await api.begin(token.current.jwt, selected, markStage);
+      const id = await api.begin(token.current.jwt, selected, markStage, separateMeeting.current === selected);
       if (generation.current !== run) { await api.completeCapture(token.current.jwt, id, true); return; }
       session.current = id;
-      detailed.current?.session(id);
       record('session', { runId: currentRun.current, sessionId: id });
       setDiagnostics((previous) => [...previous.slice(0, 2), `Ses oturumu: ${id}`, ...previous.slice(2)]);
       markStage('Ses tamponu hazırlanıyor');
@@ -518,7 +511,6 @@ export default function LiveTestScreen() {
         onDiagnostic: (message) => { if (generation.current === run) log(message); },
         onSnapshot: (snapshot) => {
           if (generation.current !== run) return;
-          detailed.current?.analysis(snapshot, captureStarted.current);
           analysisCount.current++;
           record('analysis', { runId: currentRun.current, version: snapshot.version, partial: snapshot.partial, summaryCharacters: snapshot.summary.length, decisions: snapshot.decisions.length, actions: snapshot.actions.length, missingOwners: snapshot.actions.filter(action => !action.owner).length, microphoneOpen: captureStarted.current });
           log(`Analiz sonucu alındı: adet=${analysisCount.current}; sürüm=${snapshot.version}; taslak=${snapshot.partial}; özet karakteri=${snapshot.summary.length}; karar=${snapshot.decisions.length}; aksiyon=${snapshot.actions.length}; mikrofon açık=${captureStarted.current}`);
@@ -564,7 +556,6 @@ export default function LiveTestScreen() {
         });
       }, (line) => {
         if (generation.current !== run) return;
-        detailed.current?.text(line);
         if (line.final) record('transcript', { runId: currentRun.current, seq: line.seq, characters: line.text.length, periods: (line.text.match(/\./g) ?? []).length, questions: (line.text.match(/\?/g) ?? []).length, speakerTurns: line.speakerAttribution?.turns.length ?? 0 });
         setLines((previous) => applyTranscriptEvent({ lines: previous }, line.final
           ? { type: 'final', seq: line.seq, text: line.text, speakerAttribution: line.speakerAttribution }
@@ -596,8 +587,7 @@ export default function LiveTestScreen() {
   const header = <View style={{ gap: 12 }}>
     <Text style={styles.title}>Toplantı</Text>
     <Text style={styles.text}>{status}</Text>
-    {!!detailNotice && <Text accessibilityRole="alert" style={styles.note}>{detailNotice}</Text>}
-    {signedIn && !recording && !busy && <PendingRecordingPanel beforeResolve={async () => {
+    {signedIn && !recording && !busy && <PendingRecordingPanel key={selected} meetingId={selected} onSeparateMeeting={openSeparateMeeting} beforeResolve={async () => {
       if (audioBuffer.current) { await audioBuffer.current.release(); audioBuffer.current = null; }
     }} />}
     <Pressable accessibilityRole="button" onPress={() => setSetup(!setup)}><Text style={styles.selected}>{setup ? 'Toplantı ayarlarını gizle' : 'Toplantı seç / ayarlar'}</Text></Pressable>
@@ -613,22 +603,6 @@ export default function LiveTestScreen() {
     <Pressable disabled={busy || recording} style={[styles.button, (busy || recording) && styles.disabled]} onPress={() => void signOut()}><Text style={styles.text}>Çıkış yap</Text></Pressable>
     <View>
       {signedIn && <>
-        {history && selected && <View style={{ gap: 8 }}>
-          <Text style={styles.note}>Ayrıntılı tanılama yalnız sonraki testin ilk 3 dakikasında metni, aksiyonları ve ses seviye ölçümlerini saklar. Ham ses kaydedilmez. Seçtiğiniz saklama süresi dolunca, bu hesaba erişildiğinde temizlenir.</Text>
-          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Text style={styles.note}>Sonraki testte ayrıntılı tanılama</Text>
-            <Switch accessibilityLabel="Sonraki testte ayrıntılı tanılama" disabled={busy || recording}
-              value={detailFor?.history === history && detailFor?.meeting === selected}
-              onValueChange={enabled => {
-                if (!enabled) { setDetailFor(null); return; }
-                Alert.alert('Ayrıntılı tanılamayı aç?', 'Bu testte konuşma metni ve kişi adları cihazda şifreli saklanabilir. Yalnız test cümleleriyle kullanın. Paylaşım kendiliğinden yapılmaz.', [
-                  { text: 'Vazgeç', style: 'cancel' },
-                  { text: '1 saat sakla ve aç', onPress: () => setDetailFor({ history, meeting: selected, retentionMs: 3600000 }) },
-                  { text: '24 saat sakla ve aç', onPress: () => setDetailFor({ history, meeting: selected, retentionMs: 86400000 }) },
-                ]);
-              }} />
-          </View>
-        </View>}
         <NativePushSettings disabled={busy || recording} />
         <NewMeetingForm disabled={busy || recording} onCreate={createMeeting} />
         <Pressable accessibilityRole="button" disabled={busy || recording} onPress={() => void refreshMeetings()}><Text style={styles.text}>Listeyi yenile</Text></Pressable>
@@ -667,15 +641,12 @@ export default function LiveTestScreen() {
         </>)}
       {tab === 'diagnostics' && <View>
         <HistoryPanel history={history} meetingId={selected} failure={historyFailure} failureCode={historyFailureCode} />
-        <DetailedReportPanel history={history} meetingId={selected} />
         <Text style={styles.text}>Tanılama kaydı (bu deneme)</Text>
         <Text selectable style={styles.note}>{diagnostics.join('\n')}</Text>
         <Pressable style={styles.button} onPress={() => {
           try { const storedOrTemporary = history && selected ? history.report(selected) :
             [historyFailureCode ? `Kalıcı tanılama inceleme kodu: ${historyFailureCode}` : '', ...diagnostics].filter(Boolean).join('\n');
-            // This fixed application message survives even when the journal itself cannot write.
-            // It is reset on meeting/account changes; never append transcript or native exceptions.
-            const message = [storedOrTemporary, detailNotice ? `Bu denemenin tanılama durumu (bellek): ${detailNotice}` : ''].filter(Boolean).join('\n');
+            const message = storedOrTemporary;
             void Share.share({ message }).catch(() => setStatus('Paylaşım açılamadı; tanılama metnini seçip kopyalayabilirsiniz.'));
           } catch { setStatus('Saklanan tanılama geçmişi okunamadı.'); }
         }}>

@@ -1,7 +1,9 @@
 # ADR0024 — Opt-in detailed evidence for short synthetic mobile tests
 
-Status: diagnostic candidate; native device acceptance and broader policy review
-remain open. This is not production retention/legal acceptance or a punctuation fix.
+Status: withdrawn from application UI/capture on 2026-09-25 at user request.
+The description below is historical. No new detailed capture is initiated.
+Compatibility helpers and the existing encrypted-record expiry cleanup remain.
+Native device acceptance was not completed. This was not a punctuation fix.
 Extends ADR0023 without changing the ordinary metadata report.
 
 ## Problem and evidence boundary

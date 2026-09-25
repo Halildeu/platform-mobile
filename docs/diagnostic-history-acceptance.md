@@ -1,5 +1,23 @@
 # Persistent mobile diagnostics acceptance
 
+Current 2026-09-25 candidate: detailed opt-in controls and capture hooks are withdrawn.
+Do not follow the historical detailed-test steps below. Ordinary technical history
+remains. Recording recovery is described in ADR0025: with an unknown old closure,
+choose **Önceki kaydı koru, yeni toplantı aç**, confirm, then use the ordinary
+**Konuşma testini başlat** consent. Verify microphone/live text and normal stop in
+the separate meeting. The old closure metadata must remain available in its own
+meeting; this does not certify old audio recovery or name punctuation.
+
+Recovery candidate verification: 54 Jest suites / 554 tests, TypeScript and ESLint
+passed. Independent Codex review: AGREE. Android ARM64 release build passed with
+the existing TEST signer. Expo web export and `/live-test` browser navigation
+passed; ordinary Tanılama renders without detailed controls. Native authentication
+is unavailable in that web preview, so it is not a recording acceptance test.
+No ADB device or iOS device is attached; physical acceptance and Detox/Maestro
+device runs remain open. Do not downgrade to a pre-journal APK after preserving
+multiple receipts: older clients cannot read the v3 envelope and will block start
+without deleting it. Keep this candidate or a newer compatible APK.
+
 Build on the current mobile lifecycle candidate (82cc55a, PR46). This change does
 not reconstruct the phone's old missing diagnostics or fix punctuation itself.
 

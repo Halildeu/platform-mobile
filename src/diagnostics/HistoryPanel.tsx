@@ -15,7 +15,7 @@ export function HistoryPanel({ history, meetingId, failure, failureCode }: { his
     <Text style={{ color: '#94a3b8' }}>Aynı hesapla yeniden girişte açılır. Son 30 gün ve hesap başına en fazla 20.000 teknik olay saklanır. Süresi dolan kayıtlar bu hesaba tekrar erişildiğinde temizlenir. Ses ve konuşma metni içermez.</Text>
     {failureCode && <Text accessibilityRole="alert" style={{ color: '#fca5a5' }}>Kalıcı tanılama açılamadı. {diagnosticFailureDescription(failureCode)} İnceleme kodu: {failureCode}</Text>}
     {!failureCode && (failure || history?.failed()) && <Text accessibilityRole="alert" style={{ color: '#fca5a5' }}>Tanılama geçmişinin diske yazılması doğrulanamadı. Bu oturumun bazı olayları eksik olabilir.</Text>}
-    {!history && <Text style={{ color: '#94a3b8' }}>Kalıcı tanılama hazır değil. Ayrıntılı rapor düğmeleri tanılama deposu açıldığında görünecek. Mevcut denemenin geçici kaydı aşağıdadır.</Text>}
+    {!history && <Text style={{ color: '#94a3b8' }}>Kalıcı tanılama hazır değil. Mevcut denemenin geçici kaydı aşağıdadır.</Text>}
     {history && meetingId && <>
       <Pressable accessibilityRole="button" onPress={() => { try { setReport({ history, meeting: meetingId, text: read() }); } catch { setError('Tanılama geçmişi okunamadı.'); } }}>
         <Text style={{ color: '#93c5fd' }}>Saklanan geçmişi aç / yenile</Text>

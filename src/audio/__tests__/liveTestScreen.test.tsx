@@ -8,7 +8,6 @@ import type { LiveText } from '../foregroundStream';
 import type { AnalysisSnapshot } from '../../analysis/liveAnalysis';
 import { DiagnosticHistory, type Entry } from '../../diagnostics/history';
 import { openAccountHistory } from '../../diagnostics/openAccountHistory';
-import type { DetailEntry } from '../../diagnostics/detailedCapture';
 import { DiagnosticOpenError } from '../../diagnostics/openFailure';
 jest.mock('../../diagnostics/openAccountHistory', () => ({ openAccountHistory: jest.fn() }));
 
@@ -64,6 +63,7 @@ jest.mock('../foregroundStream', () => ({ ForegroundStream: jest.fn().mockImplem
 
 beforeEach(() => {
   jest.clearAllMocks();
+  jest.mocked(api.pendingRecording).mockResolvedValue(null);
   jest.mocked(api.lifecycleOwner).mockRejectedValue(new Error('Fixture has no stable account'));
   jest.mocked(openAccountHistory).mockReset();
   jest.mocked(openAccountHistory).mockResolvedValue(null);
@@ -564,7 +564,7 @@ it('closes a diagnostic store that finishes opening after the screen was left', 
   expect(close).toHaveBeenCalledTimes(1);
 });
 
-it.each([true, false])('explains unavailable detailed controls and exports only a safe opening code (known=%s)', async known => {
+it.each([true, false])('explains unavailable history and exports only a safe opening code (known=%s)', async known => {
   jest.mocked(openAccountHistory).mockRejectedValue(known ? new DiagnosticOpenError('HISTORY_DIRECTORY') : new Error('PRIVATE_PATH_KEY_TOKEN'));
   const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: Share.sharedAction });
   const screen = render(<LiveTestScreen />);
@@ -574,7 +574,7 @@ it.each([true, false])('explains unavailable detailed controls and exports only 
   fireEvent.press(screen.getByText('Tanılama'));
   const code = known ? 'HISTORY_DIRECTORY' : 'HISTORY_UNKNOWN';
   expect(screen.getByText(new RegExp(`İnceleme kodu: ${code}`))).toBeTruthy();
-  expect(screen.getByText(/Ayrıntılı rapor düğmeleri tanılama deposu açıldığında/)).toBeTruthy();
+  expect(screen.getByText(/Kalıcı tanılama hazır değil/)).toBeTruthy();
   expect(screen.queryByText('Ayrıntılı test raporunu paylaş')).toBeNull();
   await act(async () => fireEvent.press(screen.getByText('Tanılama kaydını paylaş')));
   expect(share.mock.calls[0][0].message).toContain(code);
@@ -614,79 +614,6 @@ it('isolates diagnostic exports across logout/login and ignores the old account 
   await act(async () => screen.unmount());
 });
 
-it('records detailed content only after explicit one-run opt-in and uses a separate confirmed export', async () => {
-  const id = '604593c5-9c2d-4c86-bc1d-2aec2270cf99';
-  jest.spyOn(Crypto, 'randomUUID').mockReturnValue(id);
-  const entries: DetailEntry[] = [];
-  jest.mocked(api.meetings).mockResolvedValue([{ id, title: 'Test toplantısı' }]);
-  jest.mocked(openAccountHistory).mockImplementation(async () => new DiagnosticHistory({
-    append: jest.fn(), read: () => ({ entries: [], removed: 0 }), clear: jest.fn(), close: jest.fn(),
-    appendDetail: entry => { entries.push(entry); }, readDetails: meeting => ({ entries: entries.filter(e => e.meeting === meeting), removed: 0 }), clearDetails: jest.fn(),
-  }));
-  mockPermission.mockResolvedValue({ granted: true });
-  const screen = await openAndStart();
-  await act(async () => mockReady());
-  await act(async () => mockText({ seq: 0, final: true, text: 'DEFAULT_PRIVATE' }));
-  await act(async () => mockFailure('Controlled stop'));
-  expect(entries).toHaveLength(0);
-  fireEvent.press(screen.getByText('Toplantı seç / ayarlar'));
-  fireEvent(screen.getByLabelText('Sonraki testte ayrıntılı tanılama'), 'valueChange', true);
-  await act(async () => jest.mocked(Alert.alert).mock.calls.at(-1)?.[2]?.[1].onPress?.());
-  fireEvent.press(screen.getByText('Konuşma testini başlat'));
-  await act(async () => jest.mocked(Alert.alert).mock.calls.at(-1)?.[2]?.[1].onPress?.());
-  await act(async () => mockReady());
-  await act(async () => mockText({ seq: 1, final: true, text: 'OPTIN_PRIVATE.' }));
-  await act(async () => mockAnalysis({ version: 1, partial: true, summary: '', decisions: [], actions: [{ text: 'TASK_PRIVATE', owner: null, dueDate: null }] }));
-  await act(async () => mockFailure('Controlled stop'));
-  expect(JSON.stringify(entries)).toContain('OPTIN_PRIVATE.');
-  expect(JSON.stringify(entries)).not.toContain('DEFAULT_PRIVATE');
-  const count = entries.length;
-  fireEvent.press(screen.getByText('Konuşma testini başlat'));
-  await act(async () => jest.mocked(Alert.alert).mock.calls.at(-1)?.[2]?.[1].onPress?.());
-  await act(async () => mockText({ seq: 3, final: true, text: 'NEXT_PRIVATE' }));
-  await act(async () => mockFailure('Controlled stop'));
-  expect(entries).toHaveLength(count);
-  const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: Share.sharedAction });
-  fireEvent.press(screen.getByText('Tanılama'));
-  await act(async () => fireEvent.press(screen.getByText('Tanılama kaydını paylaş')));
-  expect(String(share.mock.calls.at(-1)?.[0].message)).not.toContain('PRIVATE');
-  fireEvent.press(screen.getByText('Ayrıntılı test raporunu paylaş'));
-  expect(share).toHaveBeenCalledTimes(1);
-  await act(async () => jest.mocked(Alert.alert).mock.calls.at(-1)?.[2]?.[1].onPress?.());
-  expect(String(share.mock.calls.at(-1)?.[0].message)).toContain('OPTIN_PRIVATE.');
-  expect(String(share.mock.calls.at(-1)?.[0].message)).toContain('TASK_PRIVATE');
-  await act(async () => screen.unmount());
-});
-
-it('consumes detailed consent when microphone permission fails instead of enabling a later run', async () => {
-  const id = '604593c5-9c2d-4c86-bc1d-2aec2270cf99';
-  jest.spyOn(Crypto, 'randomUUID').mockReturnValue(id);
-  jest.spyOn(Alert, 'alert').mockImplementation(() => {});
-  const journal = new DiagnosticHistory({ append: jest.fn(), read: () => ({ entries: [], removed: 0 }), clear: jest.fn(), close: jest.fn(), appendDetail: jest.fn() });
-  const beginDetailed = jest.spyOn(journal, 'beginDetailed');
-  jest.mocked(api.meetings).mockResolvedValue([{ id, title: 'Test toplantısı' }]);
-  jest.mocked(openAccountHistory).mockResolvedValue(journal);
-  const screen = render(<LiveTestScreen />);
-  await act(async () => {});
-  await act(async () => fireEvent.press(screen.getByText('Giriş yap')));
-  await waitFor(() => expect(screen.getByText('Test toplantısı')).toBeTruthy());
-  fireEvent.press(screen.getByText('Test toplantısı'));
-  fireEvent(screen.getByLabelText('Sonraki testte ayrıntılı tanılama'), 'valueChange', true);
-  await act(async () => jest.mocked(Alert.alert).mock.calls.at(-1)?.[2]?.[1].onPress?.());
-  mockPermission.mockResolvedValueOnce({ granted: false });
-  fireEvent.press(screen.getByText('Konuşma testini başlat'));
-  await act(async () => jest.mocked(Alert.alert).mock.calls.at(-1)?.[2]?.[1].onPress?.());
-  await waitFor(() => expect(screen.getByText(/Mikrofon izni verilmedi/)).toBeTruthy());
-  expect(beginDetailed).toHaveBeenCalledTimes(1);
-  mockPermission.mockResolvedValue({ granted: true });
-  fireEvent.press(screen.getByText('Konuşma testini başlat'));
-  await act(async () => jest.mocked(Alert.alert).mock.calls.at(-1)?.[2]?.[1].onPress?.());
-  await waitFor(() => expect(api.begin).toHaveBeenCalledTimes(1));
-  expect(beginDetailed).toHaveBeenCalledTimes(1);
-  await act(async () => mockFailure('Controlled stop'));
-  await act(async () => screen.unmount());
-});
-
 it.each(['android', 'ios'] as const)('starts audio despite optional diagnostic failures on %s', async platform => {
   jest.replaceProperty(Platform, 'OS', platform);
   const id = '604593c5-9c2d-4c86-bc1d-2aec2270cf99';
@@ -704,24 +631,22 @@ it.each(['android', 'ios'] as const)('starts audio despite optional diagnostic f
   await act(async () => {});
   await act(async () => fireEvent.press(screen.getByText('Giriş yap')));
   fireEvent.press(screen.getByText('Test toplantısı'));
-  fireEvent(screen.getByLabelText('Sonraki testte ayrıntılı tanılama'), 'valueChange', true);
-  await act(async () => alert.mock.calls.at(-1)?.[2]?.[1].onPress?.());
   fireEvent.press(screen.getByText('Konuşma testini başlat'));
   await act(async () => alert.mock.calls.at(-1)?.[2]?.[1].onPress?.());
   await waitFor(() => expect(api.begin).toHaveBeenCalledTimes(1));
-  expect(screen.getByText(/Ayrıntılı tanılama açılamadı.*DETAIL_START/)).toBeTruthy();
+  expect(screen.queryByLabelText('Sonraki testte ayrıntılı tanılama')).toBeNull();
   await act(async () => mockReady());
   expect(screen.getByText('● Mikrofon açık · Kayıt sürüyor')).toBeTruthy();
   await act(async () => mockFailure('Kontrollü test kapanışı'));
   const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: Share.sharedAction });
   fireEvent.press(screen.getByText('Tanılama'));
   fireEvent.press(screen.getByText('Tanılama kaydını paylaş'));
-  expect(share.mock.calls[0][0].message).toContain('DETAIL_START');
+  expect(screen.queryByText('Ayrıntılı test raporunu paylaş')).toBeNull();
   expect(share.mock.calls[0][0].message).not.toContain('PRIVATE');
   fireEvent.press(screen.getByText('Konuşma testini başlat'));
   await act(async () => alert.mock.calls.at(-1)?.[2]?.[1].onPress?.());
   await waitFor(() => expect(api.begin).toHaveBeenCalledTimes(2));
-  expect(begin).toHaveBeenCalledTimes(1); // Failed opt-in still belongs to only the first attempt.
+  expect(begin).not.toHaveBeenCalled(); // Detailed capture was withdrawn; no new content writes.
   await act(async () => mockFailure('Kontrollü test kapanışı'));
   await act(async () => screen.unmount());
 });
@@ -736,6 +661,33 @@ it('releases the startup lock after a preparation failure and allows a second co
   fireEvent.press(screen.getByText('Konuşma testini başlat'));
   await act(async () => jest.mocked(Alert.alert).mock.calls.at(-1)?.[2]?.[1].onPress?.());
   await waitFor(() => expect(api.begin).toHaveBeenCalledTimes(1));
+  await act(async () => mockReady());
+  expect(screen.getByText('● Mikrofon açık · Kayıt sürüyor')).toBeTruthy();
+  await act(async () => mockFailure('Kontrollü test kapanışı'));
+  await act(async () => screen.unmount());
+});
+
+it('opens a separate meeting only after confirmation and starts it through the ordinary microphone consent', async () => {
+  mockStream.isStreaming = false;
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  jest.mocked(api.pendingRecording).mockResolvedValue({ meetingId: 'meeting-1', sessionId: 'SES-old', incomplete: true, abandoning: false });
+  jest.mocked(api.createMeeting).mockResolvedValue({ id: 'meeting-2', title: 'Yeni toplantı' });
+  mockPermission.mockResolvedValue({ granted: true });
+  const screen = render(<LiveTestScreen />);
+  await act(async () => {});
+  await act(async () => fireEvent.press(screen.getByText('Giriş yap')));
+  fireEvent.press(screen.getByText('Test toplantısı'));
+  await waitFor(() => expect(screen.getByText('Önceki kaydı koru, yeni toplantı aç')).toBeTruthy());
+  fireEvent.press(screen.getByText('Önceki kaydı koru, yeni toplantı aç'));
+  expect(api.createMeeting).not.toHaveBeenCalled();
+  await act(async () => alert.mock.calls.at(-1)?.[2]?.[1].onPress?.());
+  expect(api.begin).not.toHaveBeenCalled();
+  expect(api.abandonRecording).not.toHaveBeenCalled();
+  expect(screen.getByText(/Yeni toplantı hazır/)).toBeTruthy();
+  fireEvent.press(screen.getByText('Konuşma testini başlat'));
+  await act(async () => alert.mock.calls.at(-1)?.[2]?.[1].onPress?.());
+  expect(api.begin).toHaveBeenCalledWith('test-only', 'meeting-2', expect.any(Function), true);
+  mockStream.isStreaming = true;
   await act(async () => mockReady());
   expect(screen.getByText('● Mikrofon açık · Kayıt sürüyor')).toBeTruthy();
   await act(async () => mockFailure('Kontrollü test kapanışı'));
