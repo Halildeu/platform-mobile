@@ -686,3 +686,58 @@ it('consumes detailed consent when microphone permission fails instead of enabli
   await act(async () => mockFailure('Controlled stop'));
   await act(async () => screen.unmount());
 });
+
+it.each(['android', 'ios'] as const)('starts audio despite optional diagnostic failures on %s', async platform => {
+  jest.replaceProperty(Platform, 'OS', platform);
+  const id = '604593c5-9c2d-4c86-bc1d-2aec2270cf99';
+  jest.spyOn(Crypto, 'randomUUID').mockReturnValue(id);
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  const journal = new DiagnosticHistory({ append: jest.fn(), read: () => ({ entries: [], removed: 0 }),
+    clear: jest.fn(), close: jest.fn(), appendDetail: jest.fn() });
+  // Exercise the screen boundary too: selection, capture, callbacks and cleanup must all survive.
+  jest.spyOn(journal, 'record').mockImplementation(() => { throw new Error('PRIVATE_JOURNAL_FAILURE'); });
+  const begin = jest.spyOn(journal, 'beginDetailed').mockImplementation(() => { throw new Error('PRIVATE_SETUP_FAILURE'); });
+  jest.mocked(openAccountHistory).mockResolvedValue(journal);
+  jest.mocked(api.meetings).mockResolvedValue([{ id, title: 'Test toplantısı' }]);
+  mockPermission.mockResolvedValue({ granted: true });
+  const screen = render(<LiveTestScreen />);
+  await act(async () => {});
+  await act(async () => fireEvent.press(screen.getByText('Giriş yap')));
+  fireEvent.press(screen.getByText('Test toplantısı'));
+  fireEvent(screen.getByLabelText('Sonraki testte ayrıntılı tanılama'), 'valueChange', true);
+  await act(async () => alert.mock.calls.at(-1)?.[2]?.[1].onPress?.());
+  fireEvent.press(screen.getByText('Konuşma testini başlat'));
+  await act(async () => alert.mock.calls.at(-1)?.[2]?.[1].onPress?.());
+  await waitFor(() => expect(api.begin).toHaveBeenCalledTimes(1));
+  expect(screen.getByText(/Ayrıntılı tanılama açılamadı.*DETAIL_START/)).toBeTruthy();
+  await act(async () => mockReady());
+  expect(screen.getByText('● Mikrofon açık · Kayıt sürüyor')).toBeTruthy();
+  await act(async () => mockFailure('Kontrollü test kapanışı'));
+  const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: Share.sharedAction });
+  fireEvent.press(screen.getByText('Tanılama'));
+  fireEvent.press(screen.getByText('Tanılama kaydını paylaş'));
+  expect(share.mock.calls[0][0].message).toContain('DETAIL_START');
+  expect(share.mock.calls[0][0].message).not.toContain('PRIVATE');
+  fireEvent.press(screen.getByText('Konuşma testini başlat'));
+  await act(async () => alert.mock.calls.at(-1)?.[2]?.[1].onPress?.());
+  await waitFor(() => expect(api.begin).toHaveBeenCalledTimes(2));
+  expect(begin).toHaveBeenCalledTimes(1); // Failed opt-in still belongs to only the first attempt.
+  await act(async () => mockFailure('Kontrollü test kapanışı'));
+  await act(async () => screen.unmount());
+});
+
+it('releases the startup lock after a preparation failure and allows a second confirmed attempt', async () => {
+  jest.spyOn(Crypto, 'randomUUID').mockImplementationOnce(() => { throw new Error('PRIVATE_NATIVE_FAILURE'); });
+  mockPermission.mockResolvedValue({ granted: true });
+  const screen = await openAndStart();
+  await waitFor(() => expect(screen.getByText(/İnceleme kodu: START_ID/)).toBeTruthy());
+  expect(api.begin).not.toHaveBeenCalled();
+  expect(mockPermission).not.toHaveBeenCalled();
+  fireEvent.press(screen.getByText('Konuşma testini başlat'));
+  await act(async () => jest.mocked(Alert.alert).mock.calls.at(-1)?.[2]?.[1].onPress?.());
+  await waitFor(() => expect(api.begin).toHaveBeenCalledTimes(1));
+  await act(async () => mockReady());
+  expect(screen.getByText('● Mikrofon açık · Kayıt sürüyor')).toBeTruthy();
+  await act(async () => mockFailure('Kontrollü test kapanışı'));
+  await act(async () => screen.unmount());
+});

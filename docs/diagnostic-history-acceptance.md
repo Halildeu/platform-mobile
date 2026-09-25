@@ -83,3 +83,31 @@ report; arbitrary native messages, paths, keys and tokens are not exported.
 Independent review: AGREE; reviewer reproduced Java File(URI) rejection and ran
 13 nativeHistory tests. The failure message was inspected in a synthetic browser
 preview. This does not substitute for physical Android/iOS storage acceptance.
+
+## Startup isolation after phone feedback
+
+The fcbd646 phone screenshot shows stored-history and detailed-report controls
+without the prior opening error. Its exported old meeting report contains no
+detailed events. This verifies access to the report controls, not capture or
+persistence after another login.
+
+The next opt-in attempt reportedly stayed at the start button after confirmation.
+The first phone exception is not available. Fault injection identified a real
+matching failure mode: synchronous preparation before `start()`'s try/catch left
+the active flag set, silently rejecting later attempts. Optional journal validation
+and detailed capture construction could also throw outside their own boundaries.
+Neither Object.hasOwn nor performance.now is proven to be the phone trigger.
+
+Preparation is now within cleanup coverage; an ID preparation failure shows the
+safe START_ID code and permits retry. Optional journal/detail failures cannot
+prevent normal audio startup. Detailed setup reports success only after the first
+event is stored; otherwise DETAIL_START is visible in the screen and current
+report even when the journal cannot write. Successful journals retain bounded
+detail_started/detail_failed events. The one-run choice is still consumed.
+
+Verification: 54 suites / 547 tests, TypeScript and ESLint passed. Fault-injection
+screen tests cover Android/iOS optional failures, normal capture, cleanup, repeat
+start and safe report export; an ID failure is followed by a successful retry.
+Independent review: AGREE. Real-device reproduction of the first phone exception
+and successful opt-in audio capture remain open. No audio, STT, backend or Electron
+setting was changed by this correction.

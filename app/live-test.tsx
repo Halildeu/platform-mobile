@@ -74,8 +74,10 @@ export default function LiveTestScreen() {
   const currentRun = useRef<string | undefined>(undefined);
   const detailed = useRef<DetailedCapture | null>(null);
   const [detailFor, setDetailFor] = useState<{ history: DiagnosticHistory; meeting: string; retentionMs: number } | null>(null);
+  const [detailNotice, setDetailNotice] = useState('');
   function closeHistory() {
     detailed.current?.stop('closed'); detailed.current = null; setDetailFor(null);
+    setDetailNotice('');
     const previous = historyHandle.current;
     historyHandle.current = null;
     try { previous?.close(); } catch { /* Closed handles reject subsequent reads/writes. */ }
@@ -97,7 +99,8 @@ export default function LiveTestScreen() {
   }
   function record(kind: DiagnosticKind, details: Details = {}) {
     // The rendered handle is bound to this account. Logout closes old callback handles.
-    history?.record(selected, kind, details);
+    try { history?.record(selected, kind, details); }
+    catch { setHistoryFailure(true); } // Optional diagnostics must not interrupt capture or cleanup.
   }
   useEffect(() => () => {
     authGeneration.current++;
@@ -401,9 +404,11 @@ export default function LiveTestScreen() {
   function selectMeeting(id: string | undefined) {
     if (id === selected) return;
     setDetailFor(null);
+    setDetailNotice('');
     generation.current++;
     currentRun.current = undefined;
-    history?.record(id, 'opened', { platform: Platform.OS, appVersion: Constants.expoConfig?.version });
+    try { history?.record(id, 'opened', { platform: Platform.OS, appVersion: Constants.expoConfig?.version }); }
+    catch { setHistoryFailure(true); }
     stopAnalysis.current?.(); stopAnalysis.current = null;
     const cached = id ? readMeetingView(id) : undefined;
     setCurrentCapture(false);
@@ -432,20 +437,35 @@ export default function LiveTestScreen() {
     active.current = true;
     failure.current = null;
     analysisCount.current = 0;
-    currentRun.current = Crypto.randomUUID();
+    currentRun.current = undefined;
     const detailRequested = !!history && detailFor?.history === history && detailFor.meeting === selected;
     setDetailFor(null); // Consent is consumed even if permission or server startup fails.
-    detailed.current = detailRequested ? history!.beginDetailed(selected, currentRun.current, Platform.OS, detailFor!.retentionMs) : null;
-    record('run_started', { runId: currentRun.current, background, platform: Platform.OS, appVersion: Constants.expoConfig?.version });
-    setDiagnostics([`Mobil tanılama v3 | Deneme: ${currentRun.current} | UTC: ${new Date().toISOString()} | Toplantı: ${selected}`, 'Standart teknik rapor konuşma içeriği içermez. Ayrıntılı test raporu ayrı paylaşılır. Uygulama zorla kapatılırsa son olay kaydedilemeyebilir.']);
+    detailed.current = null;
+    setDetailNotice('');
+    setDiagnostics([]);
     const run = ++generation.current;
     setCurrentCapture(true);
     setTab('text');
     setBusy(true);
     setLines([]);
     setAnalysis(null);
-    markStage('Mikrofon izni');
+    stage.current = 'Kayıt hazırlığı';
     try {
+      try { currentRun.current = Crypto.randomUUID(); }
+      catch { throw new Error('Kayıt hazırlığı tamamlanamadı. İnceleme kodu: START_ID. Yeniden deneyebilirsiniz.'); }
+      setDiagnostics([`Mobil tanılama v3 | Deneme: ${currentRun.current} | UTC: ${new Date().toISOString()} | Toplantı: ${selected}`, 'Standart teknik rapor konuşma içeriği içermez. Ayrıntılı test raporu ayrı paylaşılır. Uygulama zorla kapatılırsa son olay kaydedilemeyebilir.']);
+      if (detailRequested) {
+        try { detailed.current = history!.beginDetailed(selected, currentRun.current, Platform.OS, detailFor!.retentionMs); }
+        catch { setHistoryFailure(true); }
+        const notice = detailed.current
+          ? 'Ayrıntılı tanılama bu deneme için açıldı. İlk 3 dakikanın test verileri kaydedilecek.'
+          : 'Ayrıntılı tanılama açılamadı; ses kaydı başlatılmaya devam ediliyor. Bu denemede ayrıntılı rapor oluşmayacak. İnceleme kodu: DETAIL_START.';
+        setDetailNotice(notice);
+        log(notice);
+        record(detailed.current ? 'detail_started' : 'detail_failed', { runId: currentRun.current });
+      }
+      record('run_started', { runId: currentRun.current, background, platform: Platform.OS, appVersion: Constants.expoConfig?.version });
+      markStage('Mikrofon izni');
       if (audioBuffer.current) { await audioBuffer.current.release(); audioBuffer.current = null; }
       markStage('Oturum geçerliliği');
       token.current = await api.validSession(120000);
@@ -576,6 +596,7 @@ export default function LiveTestScreen() {
   const header = <View style={{ gap: 12 }}>
     <Text style={styles.title}>Toplantı</Text>
     <Text style={styles.text}>{status}</Text>
+    {!!detailNotice && <Text accessibilityRole="alert" style={styles.note}>{detailNotice}</Text>}
     {signedIn && !recording && !busy && <PendingRecordingPanel beforeResolve={async () => {
       if (audioBuffer.current) { await audioBuffer.current.release(); audioBuffer.current = null; }
     }} />}
@@ -650,8 +671,11 @@ export default function LiveTestScreen() {
         <Text style={styles.text}>Tanılama kaydı (bu deneme)</Text>
         <Text selectable style={styles.note}>{diagnostics.join('\n')}</Text>
         <Pressable style={styles.button} onPress={() => {
-          try { const message = history && selected ? history.report(selected) :
+          try { const storedOrTemporary = history && selected ? history.report(selected) :
             [historyFailureCode ? `Kalıcı tanılama inceleme kodu: ${historyFailureCode}` : '', ...diagnostics].filter(Boolean).join('\n');
+            // This fixed application message survives even when the journal itself cannot write.
+            // It is reset on meeting/account changes; never append transcript or native exceptions.
+            const message = [storedOrTemporary, detailNotice ? `Bu denemenin tanılama durumu (bellek): ${detailNotice}` : ''].filter(Boolean).join('\n');
             void Share.share({ message }).catch(() => setStatus('Paylaşım açılamadı; tanılama metnini seçip kopyalayabilirsiniz.'));
           } catch { setStatus('Saklanan tanılama geçmişi okunamadı.'); }
         }}>

@@ -33,6 +33,32 @@ test('storage failure is visible and cannot break recording callers', () => {
   expect(() => journal.record(meeting, 'capture_started')).not.toThrow();
   expect(journal.report(meeting)).toContain('rapor eksik olabilir');
 });
+
+test('validation failures are also contained before any storage operation', () => {
+  const journal = new DiagnosticHistory(store());
+  const original = Object.hasOwn;
+  let escaped = false;
+  try {
+    Object.hasOwn = () => { throw new Error('injected validation failure'); };
+    try { journal.record(meeting, 'run_started'); } catch { escaped = true; }
+  } finally { Object.hasOwn = original; }
+  expect(escaped).toBe(false);
+  expect(journal.failed()).toBe(true);
+});
+
+test('detailed setup failures return no capture and never escape into microphone startup', () => {
+  const disk = { ...store(), appendDetail: jest.fn() };
+  const journal = new DiagnosticHistory(disk, () => { throw new Error('injected clock failure'); });
+  expect(journal.beginDetailed(meeting, meeting, 'android', 3600000)).toBeNull();
+  expect(journal.failed()).toBe(true);
+  expect(disk.appendDetail).not.toHaveBeenCalled();
+});
+
+test('an unsuccessful first detailed write is not reported as an enabled capture', () => {
+  const journal = new DiagnosticHistory({ ...store(), appendDetail: () => { throw new Error('disk unavailable'); } });
+  expect(journal.beginDetailed(meeting, meeting, 'ios', 3600000)).toBeNull();
+  expect(journal.failed()).toBe(true);
+});
 test('malformed stream counters and HTTP correlation survive without arbitrary server content', () => {
   const event = messageEvent('Canlı analiz akışı: bağlantı=2, bayt=413, heartbeat=1, geçerli=3, bozuk JSON=4, sözleşmeye uymayan=5, bilinmeyen olay=6, sınır aşımı=7');
   expect(event?.details).toEqual({ connection: 2, bytes: 413, heartbeat: 1, valid: 3, invalidJson: 4, rejected: 5, unknownEvents: 6, overflows: 7 });

@@ -23,6 +23,7 @@ const kinds = {
   drained: 'Ses akışı kapanış yanıtı', http_finish_started: 'HTTP kayıt kapanışı başladı',
   http_finished: 'HTTP FINISHED doğrulandı', capture_failed: 'Ses yakalama veya taşıma hatası',
   analysis_closed: 'Analiz aboneliği kapatıldı', session_closed: 'Uygulama oturumu kapatıldı',
+  detail_started: 'Ayrıntılı tanılama açıldı', detail_failed: 'Ayrıntılı tanılama açılamadı (DETAIL_START)',
 } as const;
 export type DiagnosticKind = keyof typeof kinds;
 const metricKeys = new Set(['stage', 'capturedBuffers', 'capturedBytes', 'generatedFrames', 'sentFrames',
@@ -72,22 +73,31 @@ export class DiagnosticHistory {
   constructor(private readonly store: HistoryStore, private readonly now = Date.now) {}
   private cutoff() { return this.now() - HISTORY_DAYS * 86400000; }
   record(meeting: string | undefined, kind: DiagnosticKind, details: Details = {}) {
-    if (this.closed || !meeting || !UUID.test(meeting) || !Object.hasOwn(kinds, kind)) return;
-    try { this.store.append({ at: this.now(), meeting, kind, data: cleanDetails(details) }, this.cutoff(), HISTORY_LIMIT); }
+    try {
+      if (this.closed || !meeting || !UUID.test(meeting) || !Object.hasOwn(kinds, kind)) return;
+      this.store.append({ at: this.now(), meeting, kind, data: cleanDetails(details) }, this.cutoff(), HISTORY_LIMIT);
+    }
     catch { this.error = true; } // Diagnostic failure must not terminate live audio.
   }
   failed() { return this.error; }
   beginDetailed(meeting: string, runId: string, platform: string, retentionMs?: number): DetailedCapture | null {
-    // No implicit durable-content retention. Duration comes from the explicit one-run UI choice.
-    if (this.closed || !UUID.test(meeting) || !UUID.test(runId) || !this.store.appendDetail ||
-      !Number.isSafeInteger(retentionMs) || retentionMs! < 3600000 || retentionMs! > DETAIL_MAX_RETENTION_MS) return null;
-    const expiresAt = this.now() + retentionMs!;
-    return new DetailedCapture((payload, at) => {
-      if (this.closed) return false;
-      if (at >= expiresAt) return false;
-      try { this.store.appendDetail!({ at, expiresAt, meeting, runId, payload }, this.now(), DETAIL_LIMIT); return true; }
-      catch { this.error = true; return false; }
-    }, platform, this.now);
+    try {
+      // No implicit durable-content retention. Duration comes from the explicit one-run UI choice.
+      if (this.closed || !UUID.test(meeting) || !UUID.test(runId) || !this.store.appendDetail ||
+        !Number.isSafeInteger(retentionMs) || retentionMs! < 3600000 || retentionMs! > DETAIL_MAX_RETENTION_MS) return null;
+      const expiresAt = this.now() + retentionMs!;
+      let started = false;
+      const capture = new DetailedCapture((payload, at) => {
+        if (this.closed || at >= expiresAt) return false;
+        try {
+          this.store.appendDetail!({ at, expiresAt, meeting, runId, payload }, this.now(), DETAIL_LIMIT);
+          started = true;
+          return true;
+        } catch { this.error = true; return false; }
+      }, platform, this.now);
+      // Do not claim capture is enabled when even the opening event could not be stored.
+      return started ? capture : null;
+    } catch { this.error = true; return null; }
   }
   detailedReport(meeting: string): string {
     if (this.closed || !UUID.test(meeting) || !this.store.readDetails) throw new Error('Ayrıntılı tanılama hazır değil.');
