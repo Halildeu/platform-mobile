@@ -27,7 +27,10 @@ termination may prevent the final callback from reaching JavaScript.
 
 ## Opt-in detailed synthetic test
 
-1. Select a TEST meeting. In meeting settings, enable `Sonraki testte ayrıntılı
+1. Before recording, select a TEST meeting and open Tanılama. The stored-history
+   and detailed-report controls must appear without a storage-opening error.
+   If unavailable, share the displayed safe HISTORY_* code; do not repeat a
+   speech test until storage works. In meeting settings, enable `Sonraki testte ayrıntılı
    tanılama`, choosing `1 saat sakla ve aç`. Use synthetic names/tasks only.
 2. Start recording. Say one fluent name/task sentence, then a second sentence
    with a pause after its name. No deliberate microphone/engine setting change.
@@ -47,7 +50,7 @@ termination may prevent the final callback from reaching JavaScript.
 
 ## Candidate verification — 2026-09-25 (detailed extension)
 
-- Jest: 54 suites, 536 tests passed, including real SQLite reopen/pruning,
+- Jest: 54 suites, 541 tests passed, including real SQLite reopen/pruning,
   UTF-8 account quota/export bounds, synthetic PCM/sample gaps, one-run consent,
   screen remount, logout/login account isolation, stale confirmations and callbacks.
 - TypeScript and ESLint passed. Independent Codex review: AGREE after corrections.
@@ -61,3 +64,22 @@ termination may prevent the final callback from reaching JavaScript.
 - Shared STT, backend and Electron were not changed. Name punctuation remains open.
 - Broader production retention/policy review remains open (ADR0024); the detailed
   capability defaults OFF and requires an explicit short synthetic-test choice.
+
+## Native directory correction after phone feedback
+
+The b96f12b phone screenshot showed `history=null` and a storage opening failure,
+so the detailed controls were absent. Bundled Expo SQLite returns a native path
+(`/data/.../SQLite` on Android; `.standardized.path` on iOS), whereas the new
+FileSystem API expects a file URI. Android's JavaFile uses `File(URI.create(...))`,
+which rejects that schemeless path before SecureStore or SQLCipher is reached.
+
+Normalize only the FileSystem directory to `file:///`; preserve the SQLite
+location, key name, file name and encryption. Sidecar checks use the same Directory.
+The old Node-backed FileSystem fixture incorrectly accepted raw paths. It now
+rejects them, covering Android/iOS path forms and key-missing/capacity safeguards.
+Native opening failures have bounded HISTORY_* stage codes in the UI and temporary
+report; arbitrary native messages, paths, keys and tokens are not exported.
+
+Independent review: AGREE; reviewer reproduced Java File(URI) rejection and ran
+13 nativeHistory tests. The failure message was inspected in a synthetic browser
+preview. This does not substitute for physical Android/iOS storage acceptance.

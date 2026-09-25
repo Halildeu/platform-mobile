@@ -4,6 +4,8 @@ import * as Crypto from 'expo-crypto';
 import { Directory, File } from 'expo-file-system';
 import { DiagnosticHistory, decodeEntry, HISTORY_DAYS, type Entry, type HistoryStore } from './history';
 import { decodeDetail, DETAIL_STORAGE_BYTES, type DetailEntry } from './detailedCapture';
+import { databaseFileUri } from './databaseFileUri';
+import { DiagnosticOpenError, type DiagnosticFailureCode } from './openFailure';
 
 let opening: Promise<unknown> = Promise.resolve();
 
@@ -14,32 +16,45 @@ export function openDiagnosticHistory(ownerHash: string): Promise<DiagnosticHist
   return result;
 }
 async function openHistory(ownerHash: string): Promise<DiagnosticHistory> {
-  if (!/^[a-f0-9]{64}$/.test(ownerHash)) throw new Error('Tanılama kullanıcısı doğrulanamadı.');
-  const name = `diagnostics-${ownerHash}.db`;
-  const keyName = `diagnostics-key-${ownerHash}`;
-  const directory = new Directory(SQLite.defaultDatabaseDirectory);
-  if (!new File(directory, name).exists && directory.exists &&
-    directory.list().filter(file => /^diagnostics-[a-f0-9]{64}\.db$/.test(file.name)).length >= 8) {
-    throw new Error('Tanılama hesap kapasitesine ulaşıldı.');
-  }
-  let key = await SecureStore.getItemAsync(keyName);
-  if (!key) {
-    if (['', '-wal', '-shm', '-journal'].some(suffix => new File(SQLite.defaultDatabaseDirectory, name + suffix).exists)) {
-      throw new Error('Önceki tanılama deposunun anahtarı bulunamadı.');
-    }
-    key = Array.from(Crypto.getRandomBytes(32), b => b.toString(16).padStart(2, '0')).join('');
-    await SecureStore.setItemAsync(keyName, key, { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
-    if (await SecureStore.getItemAsync(keyName) !== key) throw new Error('Tanılama anahtarı saklanamadı.');
-  }
-  if (!/^[a-f0-9]{64}$/.test(key)) throw new Error('Tanılama anahtarı geçersiz.');
-  const db = SQLite.openDatabaseSync(name, { useNewConnection: true });
+  let stage: DiagnosticFailureCode = 'HISTORY_IDENTITY';
+  let db: SQLite.SQLiteDatabase | undefined;
   try {
-    if (!db.getFirstSync<{ cipher_version: string }>('PRAGMA cipher_version')?.cipher_version) throw new Error('Şifreli tanılama desteklenmiyor.');
+    if (!/^[a-f0-9]{64}$/.test(ownerHash)) throw new DiagnosticOpenError(stage);
+    const name = `diagnostics-${ownerHash}.db`;
+    const keyName = `diagnostics-key-${ownerHash}`;
+    stage = 'HISTORY_DIRECTORY';
+    const directory = new Directory(databaseFileUri(SQLite.defaultDatabaseDirectory));
+    if (!new File(directory, name).exists && directory.exists &&
+      directory.list().filter(file => /^diagnostics-[a-f0-9]{64}\.db$/.test(file.name)).length >= 8) {
+      throw new DiagnosticOpenError('HISTORY_CAPACITY');
+    }
+    stage = 'HISTORY_KEY_READ';
+    let key = await SecureStore.getItemAsync(keyName);
+    if (!key) {
+      stage = 'HISTORY_DIRECTORY';
+      if (['', '-wal', '-shm', '-journal'].some(suffix => new File(directory, name + suffix).exists)) {
+        throw new DiagnosticOpenError('HISTORY_KEY_MISSING');
+      }
+      stage = 'HISTORY_KEY_WRITE';
+      key = Array.from(Crypto.getRandomBytes(32), b => b.toString(16).padStart(2, '0')).join('');
+      await SecureStore.setItemAsync(keyName, key, { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
+      if (await SecureStore.getItemAsync(keyName) !== key) throw new DiagnosticOpenError(stage);
+    }
+    if (!/^[a-f0-9]{64}$/.test(key)) throw new DiagnosticOpenError('HISTORY_KEY_INVALID');
+    stage = 'HISTORY_DATABASE_OPEN';
+    db = SQLite.openDatabaseSync(name, { useNewConnection: true });
+    stage = 'HISTORY_CIPHER';
+    if (!db.getFirstSync<{ cipher_version: string }>('PRAGMA cipher_version')?.cipher_version) throw new DiagnosticOpenError(stage);
+    stage = 'HISTORY_UNLOCK';
     db.execSync(`PRAGMA key = "x'${key}'"`);
     db.execSync('PRAGMA secure_delete = ON; PRAGMA journal_mode = DELETE;');
+    stage = 'HISTORY_SCHEMA';
     const store = new SqlDiagnosticStore(db);
     return new DiagnosticHistory(store);
-  } catch (error) { db.closeSync(); throw error; }
+  } catch (error) {
+    try { db?.closeSync(); } catch { /* Preserve the original safe opening stage. */ }
+    throw error instanceof DiagnosticOpenError ? error : new DiagnosticOpenError(stage);
+  }
 }
 
 type Database = Pick<SQLite.SQLiteDatabase, 'execSync' | 'runSync' | 'getAllSync' | 'getFirstSync' | 'withTransactionSync' | 'closeSync'>;

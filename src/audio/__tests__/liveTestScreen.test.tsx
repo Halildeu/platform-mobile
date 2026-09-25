@@ -9,6 +9,7 @@ import type { AnalysisSnapshot } from '../../analysis/liveAnalysis';
 import { DiagnosticHistory, type Entry } from '../../diagnostics/history';
 import { openAccountHistory } from '../../diagnostics/openAccountHistory';
 import type { DetailEntry } from '../../diagnostics/detailedCapture';
+import { DiagnosticOpenError } from '../../diagnostics/openFailure';
 jest.mock('../../diagnostics/openAccountHistory', () => ({ openAccountHistory: jest.fn() }));
 
 const mockStart = jest.fn().mockResolvedValue(undefined);
@@ -561,6 +562,24 @@ it('closes a diagnostic store that finishes opening after the screen was left', 
   const close = jest.fn();
   await act(async () => { finish(new DiagnosticHistory({ append: jest.fn(), read: () => ({ entries: [], removed: 0 }), clear: jest.fn(), close })); });
   expect(close).toHaveBeenCalledTimes(1);
+});
+
+it.each([true, false])('explains unavailable detailed controls and exports only a safe opening code (known=%s)', async known => {
+  jest.mocked(openAccountHistory).mockRejectedValue(known ? new DiagnosticOpenError('HISTORY_DIRECTORY') : new Error('PRIVATE_PATH_KEY_TOKEN'));
+  const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: Share.sharedAction });
+  const screen = render(<LiveTestScreen />);
+  await act(async () => {});
+  await act(async () => fireEvent.press(screen.getByText('Giriş yap')));
+  fireEvent.press(screen.getByText('Test toplantısı'));
+  fireEvent.press(screen.getByText('Tanılama'));
+  const code = known ? 'HISTORY_DIRECTORY' : 'HISTORY_UNKNOWN';
+  expect(screen.getByText(new RegExp(`İnceleme kodu: ${code}`))).toBeTruthy();
+  expect(screen.getByText(/Ayrıntılı rapor düğmeleri tanılama deposu açıldığında/)).toBeTruthy();
+  expect(screen.queryByText('Ayrıntılı test raporunu paylaş')).toBeNull();
+  await act(async () => fireEvent.press(screen.getByText('Tanılama kaydını paylaş')));
+  expect(share.mock.calls[0][0].message).toContain(code);
+  expect(share.mock.calls[0][0].message).not.toContain('PRIVATE');
+  screen.unmount();
 });
 
 it('isolates diagnostic exports across logout/login and ignores the old account callbacks', async () => {

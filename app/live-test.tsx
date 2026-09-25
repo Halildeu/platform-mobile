@@ -16,6 +16,7 @@ import { HistoryPanel } from '../src/diagnostics/HistoryPanel';
 import { DetailedReportPanel } from '../src/diagnostics/DetailedReportPanel';
 import type { DetailedCapture } from '../src/diagnostics/detailedCapture';
 import { openAccountHistory } from '../src/diagnostics/openAccountHistory';
+import { diagnosticFailureCode, type DiagnosticFailureCode } from '../src/diagnostics/openFailure';
 import { createRecordingBuffer } from '../src/audio/recordingBuffer';
 import * as api from '../src/audio/liveTestApi';
 import { NewMeetingForm } from '../src/audio/NewMeetingForm';
@@ -67,6 +68,7 @@ export default function LiveTestScreen() {
   const [diagnostics, setDiagnostics] = useState<string[]>([]);
   const [history, setHistory] = useState<DiagnosticHistory | null>(null);
   const [historyFailure, setHistoryFailure] = useState(false);
+  const [historyFailureCode, setHistoryFailureCode] = useState<DiagnosticFailureCode | undefined>();
   const historyHandle = useRef<DiagnosticHistory | null>(null);
   const authGeneration = useRef(0);
   const currentRun = useRef<string | undefined>(undefined);
@@ -78,6 +80,7 @@ export default function LiveTestScreen() {
     historyHandle.current = null;
     try { previous?.close(); } catch { /* Closed handles reject subsequent reads/writes. */ }
     setHistory(null);
+    setHistoryFailure(false); setHistoryFailureCode(undefined);
   }
   async function prepareHistory(jwt: string, ownerGeneration: number) {
     if (Platform.OS === 'web') return;
@@ -86,10 +89,10 @@ export default function LiveTestScreen() {
       opened = await openAccountHistory(jwt, () => ownerGeneration === authGeneration.current) ?? undefined;
       if (!opened) return;
       if (ownerGeneration !== authGeneration.current) { opened.close(); return; }
-      historyHandle.current = opened; setHistory(opened); setHistoryFailure(false);
-    } catch {
+      historyHandle.current = opened; setHistory(opened); setHistoryFailure(false); setHistoryFailureCode(undefined);
+    } catch (error) {
       try { opened?.close(); } catch { /* fail closed */ }
-      if (ownerGeneration === authGeneration.current) setHistoryFailure(true);
+      if (ownerGeneration === authGeneration.current) { setHistoryFailure(true); setHistoryFailureCode(diagnosticFailureCode(error)); }
     }
   }
   function record(kind: DiagnosticKind, details: Details = {}) {
@@ -642,12 +645,13 @@ export default function LiveTestScreen() {
           </Pressable>}
         </>)}
       {tab === 'diagnostics' && <View>
-        <HistoryPanel history={history} meetingId={selected} failure={historyFailure} />
+        <HistoryPanel history={history} meetingId={selected} failure={historyFailure} failureCode={historyFailureCode} />
         <DetailedReportPanel history={history} meetingId={selected} />
         <Text style={styles.text}>Tanılama kaydı (bu deneme)</Text>
         <Text selectable style={styles.note}>{diagnostics.join('\n')}</Text>
         <Pressable style={styles.button} onPress={() => {
-          try { const message = history && selected ? history.report(selected) : diagnostics.join('\n');
+          try { const message = history && selected ? history.report(selected) :
+            [historyFailureCode ? `Kalıcı tanılama inceleme kodu: ${historyFailureCode}` : '', ...diagnostics].filter(Boolean).join('\n');
             void Share.share({ message }).catch(() => setStatus('Paylaşım açılamadı; tanılama metnini seçip kopyalayabilirsiniz.'));
           } catch { setStatus('Saklanan tanılama geçmişi okunamadı.'); }
         }}>

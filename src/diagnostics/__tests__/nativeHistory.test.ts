@@ -7,17 +7,26 @@ import * as SecureStore from 'expo-secure-store';
 import { openDiagnosticHistory, SqlDiagnosticStore } from '../nativeHistory';
 import { DiagnosticHistory } from '../history';
 import { DETAIL_STORAGE_BYTES, DETAIL_REPORT_CHARACTERS } from '../detailedCapture';
+import { databaseFileUri } from '../databaseFileUri';
 
 let mockDirectory: string;
-jest.mock('expo-sqlite', () => ({ get defaultDatabaseDirectory() { return mockDirectory; }, openDatabaseSync: jest.fn() }));
+let mockNativeDirectory: string;
+jest.mock('expo-sqlite', () => ({ get defaultDatabaseDirectory() { return mockNativeDirectory; }, openDatabaseSync: jest.fn() }));
 jest.mock('expo-secure-store', () => ({ getItemAsync: jest.fn(), setItemAsync: jest.fn(), WHEN_UNLOCKED_THIS_DEVICE_ONLY: 1 }));
 jest.mock('expo-crypto', () => ({ getRandomBytes: () => new Uint8Array(32).fill(17) }));
+function mockFsPath(uri: string) {
+  // Match the native File(URI) boundary instead of accepting arbitrary Node paths.
+  if (!uri.startsWith('file:///')) throw new Error('URI is not absolute');
+  const decoded = decodeURIComponent(uri.slice('file://'.length));
+  if (decoded !== mockNativeDirectory && !decoded.startsWith(mockNativeDirectory + '/')) throw new Error('Wrong native directory');
+  return jest.requireActual('node:path').join(mockDirectory, decoded.slice(mockNativeDirectory.length));
+}
 jest.mock('expo-file-system', () => ({
-  Directory: class { path: string; constructor(path: string) { this.path = path; }
-    get exists() { return jest.requireActual('node:fs').existsSync(this.path); }
-    list() { return jest.requireActual('node:fs').readdirSync(this.path).map((name: string) => ({ name })); } },
-  File: class { path: string; constructor(directory: string | { path: string }, name: string) { this.path = jest.requireActual('node:path').join(typeof directory === 'string' ? directory : directory.path, name); }
-    get exists() { return jest.requireActual('node:fs').existsSync(this.path); } },
+  Directory: class { uri: string; constructor(uri: string) { this.uri = uri; }
+    get exists() { return jest.requireActual('node:fs').existsSync(mockFsPath(this.uri)); }
+    list() { return jest.requireActual('node:fs').readdirSync(mockFsPath(this.uri)).map((name: string) => ({ name })); } },
+  File: class { uri: string; constructor(directory: string | { uri: string }, name: string) { this.uri = `${typeof directory === 'string' ? directory : directory.uri}/${name}`; }
+    get exists() { return jest.requireActual('node:fs').existsSync(mockFsPath(this.uri)); } },
 }));
 let keys: Map<string, string>; let databases: DatabaseSync[]; let cipher: boolean;
 const owner = 'a'.repeat(64), other = 'b'.repeat(64);
@@ -36,6 +45,7 @@ function adapter(db: DatabaseSync) {
 beforeEach(() => {
   jest.resetAllMocks(); keys = new Map(); databases = []; cipher = true;
   mockDirectory = mkdtempSync(join(tmpdir(), 'mobile-diagnostics-'));
+  mockNativeDirectory = '/data/user/0/com.workcube.meeting/files/SQLite';
   jest.mocked(SecureStore.getItemAsync).mockImplementation(async k => keys.get(k) ?? null);
   jest.mocked(SecureStore.setItemAsync).mockImplementation(async (k, v) => { keys.set(k, v); });
   jest.mocked(SQLite.openDatabaseSync).mockImplementation(name => { const db = new DatabaseSync(join(mockDirectory, name)); databases.push(db); return adapter(db); });
@@ -65,7 +75,8 @@ test.each(['missing-key', 'missing-cipher', 'key-write'] as const)('fails closed
   if (mode === 'missing-key') writeFileSync(join(mockDirectory, `diagnostics-${owner}.db`), 'old-data');
   if (mode === 'missing-cipher') cipher = false;
   if (mode === 'key-write') jest.mocked(SecureStore.setItemAsync).mockResolvedValue(undefined);
-  await expect(openDiagnosticHistory(owner)).rejects.toThrow();
+  const codes = { 'missing-key': 'HISTORY_KEY_MISSING', 'missing-cipher': 'HISTORY_CIPHER', 'key-write': 'HISTORY_KEY_WRITE' };
+  await expect(openDiagnosticHistory(owner)).rejects.toMatchObject({ code: codes[mode] });
   if (mode !== 'missing-cipher') expect(SQLite.openDatabaseSync).not.toHaveBeenCalled();
 });
 test('purges expired records on read and explicitly reports capacity truncation', () => {
@@ -78,9 +89,30 @@ test('purges expired records on read and explicitly reports capacity truncation'
 });
 test('account cap prevents unbounded files and rejects invalid path identities', async () => {
   for (let i = 0; i < 8; i++) writeFileSync(join(mockDirectory, `diagnostics-${String(i).repeat(64)}.db`), 'old');
-  await expect(openDiagnosticHistory(owner)).rejects.toThrow('kapasitesine');
+  await expect(openDiagnosticHistory(owner)).rejects.toMatchObject({ code: 'HISTORY_CAPACITY' });
   await expect(openDiagnosticHistory('../bad')).rejects.toThrow();
   expect(existsSync(join(mockDirectory, `diagnostics-${owner}.db`))).toBe(false);
+});
+
+test('uses file URIs with native iOS paths while leaving the SQLite location unchanged', async () => {
+  mockNativeDirectory = '/var/mobile/Containers/Data/Application/TEST/Documents/SQLite';
+  const first = await openDiagnosticHistory(owner); first.record(meeting, 'opened'); first.close();
+  expect((await openDiagnosticHistory(owner)).report(meeting)).toContain('Toplantı tanılaması açıldı');
+  expect(SQLite.openDatabaseSync).toHaveBeenCalledWith(`diagnostics-${owner}.db`, { useNewConnection: true });
+});
+
+test('preserves native path characters and existing file URIs; rejects relative and non-file locations', () => {
+  expect(databaseFileUri('/data/user/0/app/files/SQLite')).toBe('file:///data/user/0/app/files/SQLite');
+  expect(databaseFileUri('/var/mobile/Örnek % #?/SQLite')).toBe('file:///var/mobile/%C3%96rnek%20%25%20%23%3F/SQLite');
+  expect(databaseFileUri('file:///var/mobile/Already%20Encoded/SQLite')).toBe('file:///var/mobile/Already%20Encoded/SQLite');
+  for (const path of ['relative', 'https://example.test', '//remote/share', 'content://authority', '']) expect(() => databaseFileUri(path)).toThrow();
+});
+
+test('returns safe stages instead of native exception messages or keys', async () => {
+  jest.mocked(SecureStore.getItemAsync).mockRejectedValueOnce(new Error('SECRET_NATIVE_PATH_TOKEN'));
+  await expect(openDiagnosticHistory(owner)).rejects.toMatchObject({ code: 'HISTORY_KEY_READ', message: 'Şifreleme anahtarı cihazdan okunamadı.' });
+  mockNativeDirectory = 'relative';
+  await expect(openDiagnosticHistory(owner)).rejects.toMatchObject({ code: 'HISTORY_DIRECTORY' });
 });
 
 test('keeps opt-in content separate from ordinary reports, survives reopen, expires within 24h and isolates accounts', async () => {
