@@ -282,6 +282,32 @@ it('creates and selects a new meeting without starting the microphone', async ()
   expect(mockStart).not.toHaveBeenCalled(); expect(api.begin).not.toHaveBeenCalled();
 });
 
+it('starts an ordinarily created meeting with normal consent while the old meeting receipt remains visible', async () => {
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  jest.mocked(api.restoreSession).mockResolvedValueOnce({ jwt: 'restored', expiresAt: Date.now() + 300000 });
+  jest.mocked(api.pendingRecording).mockResolvedValue({ meetingId: 'meeting-1', sessionId: 'SES-old', incomplete: true, abandoning: false });
+  jest.mocked(api.createMeeting).mockResolvedValueOnce({ id: 'new-meeting', title: 'Yeni görüşme' });
+  mockPermission.mockResolvedValue({ granted: true });
+  const screen = render(<LiveTestScreen />);
+  await waitFor(() => expect(screen.getByText('Test toplantısı')).toBeTruthy());
+  fireEvent.press(screen.getByText('Yeni toplantı oluştur'));
+  fireEvent.changeText(screen.getByLabelText('Yeni toplantı adı'), 'Yeni görüşme');
+  fireEvent.press(screen.getByText('Toplantıyı oluştur'));
+  await waitFor(() => expect(screen.getByText('✓ Yeni görüşme')).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/Seçili toplantıda Konuşma testini başlat/)).toBeTruthy());
+  expect(screen.queryByText('Önceki kaydı koru, yeni toplantı aç')).toBeNull();
+  expect(api.begin).not.toHaveBeenCalled();
+  fireEvent.press(screen.getByText('Konuşma testini başlat'));
+  await act(async () => alert.mock.calls.at(-1)?.[2]?.[1].onPress?.());
+  expect(api.begin).toHaveBeenCalledWith('test-only', 'new-meeting', expect.any(Function));
+  expect(api.createMeeting).toHaveBeenCalledTimes(1);
+  expect(api.abandonRecording).not.toHaveBeenCalled();
+  await act(async () => mockReady());
+  expect(screen.getByText('● Mikrofon açık · Kayıt sürüyor')).toBeTruthy();
+  await act(async () => mockFailure('Kontrollü test kapanışı'));
+  await act(async () => screen.unmount());
+});
+
 it('opens an authorized notification meeting only after session restoration without starting audio', async () => {
   mockParams = { notificationMeetingId: 'meeting-1' };
   jest.mocked(api.restoreSession).mockResolvedValueOnce({ jwt: 'restored', expiresAt: Date.now() + 300000 });
@@ -686,7 +712,7 @@ it('opens a separate meeting only after confirmation and starts it through the o
   expect(screen.getByText(/Yeni toplantı hazır/)).toBeTruthy();
   fireEvent.press(screen.getByText('Konuşma testini başlat'));
   await act(async () => alert.mock.calls.at(-1)?.[2]?.[1].onPress?.());
-  expect(api.begin).toHaveBeenCalledWith('test-only', 'meeting-2', expect.any(Function), true);
+  expect(api.begin).toHaveBeenCalledWith('test-only', 'meeting-2', expect.any(Function));
   mockStream.isStreaming = true;
   await act(async () => mockReady());
   expect(screen.getByText('● Mikrofon açık · Kayıt sürüyor')).toBeTruthy();

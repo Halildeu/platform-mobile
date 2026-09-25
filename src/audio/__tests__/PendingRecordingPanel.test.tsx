@@ -9,6 +9,15 @@ beforeEach(() => {
   jest.mocked(api.pendingRecording).mockResolvedValue({ meetingId: 'meeting', sessionId: 'SES-owned', incomplete: true, abandoning: false });
 });
 afterEach(() => jest.restoreAllMocks());
+test('an unrelated pending recording explains ordinary start without requiring another meeting', async () => {
+  const separate = jest.fn(async () => {});
+  const screen = render(<PendingRecordingPanel meetingId="new-meeting" onSeparateMeeting={separate} beforeResolve={async () => {}} />);
+  await waitFor(() => expect(screen.getByText(/Seçili toplantıda Konuşma testini başlat/)).toBeTruthy());
+  expect(screen.getByText('Önceki toplantının bekleyen kaydı')).toBeTruthy();
+  expect(screen.queryByText('Önceki kaydı koru, yeni toplantı aç')).toBeNull();
+  expect(api.finish).not.toHaveBeenCalled(); expect(api.abandonRecording).not.toHaveBeenCalled();
+  expect(separate).not.toHaveBeenCalled();
+});
 test('explicit confirmation is required and local handle closes before abandon', async () => {
   const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
   const release = jest.fn(async () => {});

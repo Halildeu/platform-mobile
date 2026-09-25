@@ -420,10 +420,9 @@ describe('independent meeting recovery journal', () => {
     const old = { ...receipt, completion: 'unknown' };
     stored = JSON.stringify(old);
     const calls = mockNewSession();
-    await expect(begin(jwt, secondMeeting)).rejects.toThrow('eksiksiz');
+    await expect(begin(jwt, meetingId)).rejects.toThrow('eksiksiz');
     expect(calls).not.toHaveBeenCalled();
-    await expect(begin(jwt, meetingId, undefined, true)).rejects.toThrow('eksiksiz');
-    await expect(begin(jwt, secondMeeting, undefined, true)).resolves.toBe(secondSession);
+    await expect(begin(jwt, secondMeeting)).resolves.toBe(secondSession);
     expect(JSON.parse(stored!)).toMatchObject({ version: 3, records: [old, { externalSessionId: secondSession, completion: 'unknown' }] });
     captureStopped(secondSession);
     await expect(completeCapture(jwt, secondSession, false)).resolves.toBe(false);
@@ -443,7 +442,7 @@ describe('independent meeting recovery journal', () => {
   it('preserves an existing abandonment intent and its timestamp while allocating a different meeting', async () => {
     const old = { ...receipt, completion: 'unknown', abandon: { endedAt: new Date().toISOString(), canonical: true } };
     stored = JSON.stringify(old); mockNewSession();
-    await begin(jwt, secondMeeting, undefined, true);
+    await begin(jwt, secondMeeting);
     captureStopped(secondSession);
     expect(JSON.parse(stored!).records[0]).toEqual(old);
   });
@@ -451,11 +450,11 @@ describe('independent meeting recovery journal', () => {
     const calls = jest.spyOn(global, 'fetch');
     const records = Array.from({ length: 20 }, (_, i) => ({ ...receipt, externalSessionId: `SES-old-${i}`, completion: 'unknown' }));
     stored = JSON.stringify({ version: 3, records });
-    await expect(begin(jwt, secondMeeting, undefined, true)).rejects.toThrow('sınır');
+    await expect(begin(jwt, secondMeeting)).rejects.toThrow('sınır');
     stored = JSON.stringify({ version: 3, records: [records[0], records[0]] });
-    await expect(begin(jwt, secondMeeting, undefined, true)).rejects.toThrow('doğrulanamadı');
+    await expect(begin(jwt, secondMeeting)).rejects.toThrow('doğrulanamadı');
     stored = JSON.stringify({ version: 3, records: [{ ...receipt, ownerHash: 'f'.repeat(64) }] });
-    await expect(begin(jwt, secondMeeting, undefined, true)).rejects.toThrow('önceki kullanıcı');
+    await expect(begin(jwt, secondMeeting)).rejects.toThrow('önceki kullanıcı');
     expect(calls).not.toHaveBeenCalled();
   });
   it('allows genuine capture proof to be retried after a transient local read error', async () => {
@@ -486,8 +485,21 @@ describe('independent meeting recovery journal', () => {
     const unknown = { ...receipt, externalSessionId: 'SES-unknown', completion: 'unknown' };
     stored = JSON.stringify({ version: 3, records: [{ ...receipt, endedAt }, unknown] });
     const calls = jest.spyOn(global, 'fetch').mockResolvedValue(ok({ ...linked, endedAt }));
-    await expect(begin(jwt, secondMeeting)).rejects.toThrow('eksiksiz');
+    await expect(begin(jwt, meetingId)).rejects.toThrow('eksiksiz');
     expect(calls).toHaveBeenCalledTimes(1);
     expect(JSON.parse(stored!)).toEqual(unknown);
+  });
+  it('reconciles only the selected meeting while retaining unrelated confirmed and unknown receipts', async () => {
+    const endedAt = new Date(finished.finishedAtMs).toISOString();
+    const old = [receipt, { ...receipt, externalSessionId: 'SES-unknown', completion: 'unknown' }];
+    const selected = { ...receipt, meetingId: secondMeeting, externalSessionId: 'SES-selected-old', endedAt };
+    stored = JSON.stringify({ version: 3, records: [...old, selected] });
+    const calls = mockNewSession();
+    calls.mockResolvedValueOnce(ok({ ...linked, ...selected, sessionId: requestId, meetingStatus: 'COMPLETED' }));
+    await expect(begin(jwt, secondMeeting)).resolves.toBe(secondSession);
+    expect(calls).toHaveBeenCalledTimes(4); // One selected closure, then consent/session/link.
+    expect(calls.mock.calls[0][0]).toContain(`/meetings/${secondMeeting}/recording-lifecycle`);
+    expect(JSON.parse(stored!).records.slice(0, 2)).toEqual(old);
+    captureStopped(secondSession);
   });
 });

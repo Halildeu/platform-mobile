@@ -291,13 +291,15 @@ export async function meetings(jwt: string): Promise<Meeting[]> {
     typeof item?.id === 'string' && /^[0-9a-f-]{36}$/i.test(item.id) && typeof item.title === 'string');
 }
 
-export function begin(jwt: string, meetingId: string, onStage?: (stage: string) => void, preserveOtherMeetings = false): Promise<string> {
+export function begin(jwt: string, meetingId: string, onStage?: (stage: string) => void): Promise<string> {
   return orderedLifecycle(async () => {
     if (!UUID.test(meetingId)) throw new Error('Geçersiz toplantı.');
     if (activeLifecycleSession) throw new Error('Etkin kayıt durdurulmadan yeni kayıt başlatılamaz.');
     const ownerHash = await lifecycleOwner(jwt);
     const records = await readLifecycles(ownerHash);
-    const toResolve = preserveOtherMeetings ? records.filter(row => row.meetingId === meetingId) : records;
+    // Closure belongs to its meeting, regardless of how the selected meeting was opened.
+    // Unrelated receipts remain recoverable; they are never finished or discarded here.
+    const toResolve = records.filter(row => row.meetingId === meetingId);
     for (const previous of toResolve) {
       onStage?.('Önceki kaydın kapanış bağlantısı doğrulanıyor');
       await finishPending(jwt, previous);

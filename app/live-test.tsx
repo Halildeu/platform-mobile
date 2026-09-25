@@ -70,9 +70,7 @@ export default function LiveTestScreen() {
   const historyHandle = useRef<DiagnosticHistory | null>(null);
   const authGeneration = useRef(0);
   const currentRun = useRef<string | undefined>(undefined);
-  const separateMeeting = useRef<string | undefined>(undefined);
   function closeHistory() {
-    separateMeeting.current = undefined;
     const previous = historyHandle.current;
     historyHandle.current = null;
     try { previous?.close(); } catch { /* Closed handles reject subsequent reads/writes. */ }
@@ -428,7 +426,6 @@ export default function LiveTestScreen() {
       const meeting = await api.createMeeting(current.jwt, `Yeni toplantı ${new Date().toLocaleString('tr-TR')}`);
       if (ownerGeneration !== authGeneration.current) return;
       token.current = current;
-      separateMeeting.current = meeting.id;
       setList(previous => [meeting, ...previous.filter(item => item.id !== meeting.id)]);
       selectMeeting(meeting.id);
       setCurrentCapture(true); setTab('text'); setSetup(false);
@@ -481,7 +478,7 @@ export default function LiveTestScreen() {
       finally { permissionPending.current = false; }
       if (generation.current !== run) return;
       if (['background'].includes(AppState.currentState)) throw new Error('Kaydı başlatmak için uygulamaya dönün.');
-      const id = await api.begin(token.current.jwt, selected, markStage, separateMeeting.current === selected);
+      const id = await api.begin(token.current.jwt, selected, markStage);
       if (generation.current !== run) { await api.completeCapture(token.current.jwt, id, true); return; }
       session.current = id;
       record('session', { runId: currentRun.current, sessionId: id });
