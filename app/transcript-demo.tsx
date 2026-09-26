@@ -18,6 +18,7 @@ import type {
 import {
   applyTranscriptEvent,
   initialTranscriptState,
+  type TranscriptEvent,
 } from '../src/transcript/transcriptState';
 import { TranscriptView } from '../src/transcript/TranscriptView';
 
@@ -50,14 +51,24 @@ const WORD_SCRIPT: [number, WsStreamEvent][] = ['Zeynep', '.', 'Sunum', 'dosyas�
     turns: [{ speaker: 'S1', textStart: 0, textEnd: text.length, startMs: 0, endMs: 100 }] },
 }]);
 
+// Synthetic reconnect regression: these are fixture events, not a server/phone recording.
+const RECONNECT_SCRIPT: [number, TranscriptEvent][] = [
+  [200, { ...f(0, 'İlk bağlantıda alınan kesin metin.'), connectionId: 1 }],
+  [200, { ...p(1, 'Bağlantı kesilirken', 'yarım kalan söz'), connectionId: 1 }],
+  [200, { type: 'connection_interrupted', connectionId: 1 }],
+  [200, { ...p(0, '', 'Yeni bağlantının cümlesi'), connectionId: 3 }],
+  [200, { ...f(0, 'Yeni bağlantının cümlesi.'), connectionId: 3 }],
+  [200, { ...f(0, 'Üçüncü bağlantının cümlesi.'), connectionId: 5 }],
+];
+
 export default function TranscriptDemoScreen() {
   const [run, setRun] = useState(0);
   const { scenario } = useLocalSearchParams<{ scenario?: string }>();
-  return <DemoRun key={`${run}-${scenario}`} script={scenario === 'word-fragments' ? WORD_SCRIPT : SCRIPT}
+  return <DemoRun key={`${run}-${scenario}`} script={scenario === 'reconnect' ? RECONNECT_SCRIPT : scenario === 'word-fragments' ? WORD_SCRIPT : SCRIPT}
     restart={() => setRun((value) => value + 1)} />;
 }
 
-function DemoRun({ restart, script }: { restart: () => void; script: [number, WsStreamEvent][] }) {
+function DemoRun({ restart, script }: { restart: () => void; script: [number, TranscriptEvent][] }) {
   const [state, dispatch] = useReducer(applyTranscriptEvent, undefined, initialTranscriptState);
 
   useEffect(() => {

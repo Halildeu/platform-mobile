@@ -79,7 +79,7 @@ test('real proxy final flows through socket, state and rendered anonymous labels
   let state = initialTranscriptState();
   const socket: LiveSocket = { readyState: 1, bufferedAmount: 0, onopen: null, onclose: null, onerror: null, onmessage: null, send: jest.fn(), close: jest.fn() };
   const client = new ForegroundStream(socket, jest.fn(), line => {
-    state = applyTranscriptEvent(state, { type: 'final', seq: line.seq, text: line.text, speakerAttribution: line.speakerAttribution });
+    state = applyTranscriptEvent(state, { type: 'final', connectionId: line.connectionId, seq: line.seq, text: line.text, speakerAttribution: line.speakerAttribution });
   }, jest.fn());
   const final = { type: 'final', seq: 0, text: 'Merhaba dünya', reason: 'silence', elapsed_ms: 10, rms: 0.5,
     source_start_sample: 0, source_end_sample: 16000, speakerAttribution: attribution };

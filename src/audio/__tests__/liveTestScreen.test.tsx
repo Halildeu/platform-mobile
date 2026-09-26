@@ -26,6 +26,7 @@ const mockDrain = jest.fn();
 let mockFailure: (message: string) => void;
 let mockReady: () => void;
 let mockText: (line: LiveText) => void;
+let mockConnectionInterrupted: (connectionId: number) => void;
 let mockAnalysis: (snapshot: AnalysisSnapshot) => void;
 let mockAnalysisDiagnostic: ((message: string) => void) | undefined;
 let mockParams: { notificationMeetingId?: string } = {};
@@ -53,10 +54,11 @@ jest.mock('../../analysis/analysisSubscription', () => ({ subscribeAnalysis: (op
   return () => options.onDiagnostic?.('Canlı analiz akışı: bağlantı=1, bayt=413, heartbeat=1, geçerli=1');
 } }));
 jest.mock('../foregroundStream', () => ({ ForegroundStream: jest.fn().mockImplementation(
-  (_socket, _ready, _text, failure) => {
+  (_socket, _ready, _text, failure, _buffer, recovery) => {
     mockFailure = failure;
     mockReady = _ready;
     mockText = _text;
+    mockConnectionInterrupted = recovery.onConnectionInterrupted;
     return { send: jest.fn(), stop: mockDrain, dispose: jest.fn(), completionConfirmed: () => true, diagnostics: () => ({}) };
   }),
 }));
@@ -116,6 +118,23 @@ it('preserves validated speaker attribution through the actual live screen callb
   } }); });
   expect(screen.getByText(/speakerNotice|kişi adı veya kimlik/)).toBeTruthy();
   expect(screen.getByText(/Merhaba/)).toBeTruthy();
+  screen.unmount();
+});
+
+it('preserves earlier text after socket sequence reset through the real screen callbacks', async () => {
+  mockPermission.mockResolvedValue({ granted: true });
+  const screen = await openAndStart();
+  await act(async () => {
+    mockText({ connectionId: 1, seq: 0, text: 'Önceki cümle.', final: true });
+    mockText({ connectionId: 1, seq: 1, text: 'Kesinleşmemiş cümle', final: false });
+    mockConnectionInterrupted(1);
+    mockText({ connectionId: 3, seq: 0, text: 'Yeni cümle.', final: true });
+  });
+  expect(screen.getByText('Önceki cümle.')).toBeTruthy();
+  expect(screen.getByText('Yeni cümle.')).toBeTruthy();
+  expect(screen.getByText('Kesinleşmemiş cümle')).toBeTruthy();
+  expect(screen.getByText(/interruptedTag|bu metin kesinleşmedi/)).toBeTruthy();
+  expect(screen.queryByText(/revisedTag|· düzeltildi/)).toBeNull();
   screen.unmount();
 });
 

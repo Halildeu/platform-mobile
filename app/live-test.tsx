@@ -553,12 +553,17 @@ export default function LiveTestScreen() {
         });
       }, (line) => {
         if (generation.current !== run) return;
-        if (line.final) record('transcript', { runId: currentRun.current, seq: line.seq, characters: line.text.length, periods: (line.text.match(/\./g) ?? []).length, questions: (line.text.match(/\?/g) ?? []).length, speakerTurns: line.speakerAttribution?.turns.length ?? 0 });
+        if (line.final) record('transcript', { runId: currentRun.current, connection: line.connectionId, seq: line.seq, characters: line.text.length, periods: (line.text.match(/\./g) ?? []).length, questions: (line.text.match(/\?/g) ?? []).length, speakerTurns: line.speakerAttribution?.turns.length ?? 0 });
         setLines((previous) => applyTranscriptEvent({ lines: previous }, line.final
-          ? { type: 'final', seq: line.seq, text: line.text, speakerAttribution: line.speakerAttribution }
-          : { type: 'partial', seq: line.seq, confirmed: line.confirmed ?? '', tentative: line.tentative ?? line.text }).lines);
+          ? { type: 'final', connectionId: line.connectionId, seq: line.seq, text: line.text, speakerAttribution: line.speakerAttribution }
+          : { type: 'partial', connectionId: line.connectionId, seq: line.seq, confirmed: line.confirmed ?? '', tentative: line.tentative ?? line.text }).lines);
       }, (message) => { if (generation.current !== run) return; record('capture_failed', { runId: currentRun.current }); log(`Ses bağlantısı hatası: ${message}`); failure.current = message; setStatus(message); void stopRef.current('Ses aktarımı veya WebSocket hatası'); },
       preparedBuffer.buffer, {
+        onConnectionInterrupted: (connectionId) => {
+          if (generation.current !== run) return;
+          record('transcript_connection_closed', { runId: currentRun.current, connection: connectionId });
+          setLines(previous => applyTranscriptEvent({ lines: previous }, { type: 'connection_interrupted', connectionId }).lines);
+        },
         connect: async () => {
           const refreshed = await api.validSession(30000);
           if (generation.current !== run) throw new Error('Kayıt kapandı.');

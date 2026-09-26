@@ -1,5 +1,6 @@
 import { ForegroundStream, type LiveSocket } from '../foregroundStream';
 import { OfflineAudioBuffer } from '../offlineBuffer';
+import { applyTranscriptEvent, initialTranscriptState } from '../../transcript/transcriptState';
 
 function setup(buffer?: OfflineAudioBuffer) {
   const socket: LiveSocket = { readyState: 1, bufferedAmount: 0, onopen: null, onmessage: null, onerror: null, onclose: null, send: jest.fn(), close: jest.fn() };
@@ -15,9 +16,9 @@ test('preserves validated source sample ranges without altering received text or
   const { client, event, text } = setup();
   event({ type: 'ready' });
   event({ type: 'final', seq: 1, text: 'Zeynep.', source_start_sample: 1600, source_end_sample: 8000 });
-  expect(text).toHaveBeenLastCalledWith({ seq: 1, text: 'Zeynep.', final: true, sourceStartSample: 1600, sourceEndSample: 8000 });
+  expect(text).toHaveBeenLastCalledWith({ connectionId: 1, seq: 1, text: 'Zeynep.', final: true, sourceStartSample: 1600, sourceEndSample: 8000 });
   event({ type: 'final', seq: 2, text: 'Sunumu hazırlayacak.', source_start_sample: -1, source_end_sample: 5 });
-  expect(text).toHaveBeenLastCalledWith({ seq: 2, text: 'Sunumu hazırlayacak.', final: true });
+  expect(text).toHaveBeenLastCalledWith({ connectionId: 1, seq: 2, text: 'Sunumu hazırlayacak.', final: true });
   client.dispose();
 });
 
@@ -60,6 +61,56 @@ test('reconnect retains original sequence and ignores receipts from the old sock
   expect(frames).toEqual([0n, 1n]); expect(ready).toHaveBeenCalledTimes(1);
   emit(second, { type: 'audio_ack', chunk_seq: 0 }); emit(second, { type: 'audio_ack', chunk_seq: 1 });
   expect(buffer.pending()).toBe(0);
+  client.dispose(); expect(jest.getTimerCount()).toBe(0);
+});
+
+test('reconnect keeps text chronological without overwriting old finals or leaving an active draft', async () => {
+  const makeSocket = (): LiveSocket => ({ readyState: 1, bufferedAmount: 0, onopen: null, onmessage: null,
+    onerror: null, onclose: null, send: jest.fn(), close: jest.fn() });
+  const [first, second, third] = [makeSocket(), makeSocket(), makeSocket()];
+  const connect = jest.fn().mockResolvedValueOnce(second).mockResolvedValueOnce(third);
+  let state = initialTranscriptState();
+  const ready = jest.fn(), fail = jest.fn();
+  const client = new ForegroundStream(first, ready, line => {
+    state = applyTranscriptEvent(state, line.final
+      ? { type: 'final', ...line }
+      : { type: 'partial', ...line, confirmed: line.confirmed ?? '', tentative: line.tentative ?? '' });
+  }, fail, new OfflineAudioBuffer(), { connect, onStatus: jest.fn(), onConnectionInterrupted: connectionId => {
+    state = applyTranscriptEvent(state, { type: 'connection_interrupted', connectionId });
+  } });
+  const emit = (socket: LiveSocket, event: object) => socket.onmessage?.({ data: JSON.stringify(event) });
+  emit(first, { type: 'ready' });
+  emit(first, { type: 'final', seq: 0, text: 'İlk görev.' });
+  emit(first, { type: 'final', seq: 1, text: 'İkinci görev.' });
+  emit(first, { type: 'partial', seq: 2, confirmed: 'Yarım', tentative: 'cümle' });
+  first.onclose?.({ code: 1006 });
+  expect(state.lines.map(line => line.status)).toEqual(['final', 'final', 'interrupted']);
+  const interrupted = state;
+  await jest.advanceTimersByTimeAsync(500);
+  emit(second, { type: 'ready' });
+  expect(state).toBe(interrupted); // Successful reconnect with silence does not resurrect a draft.
+  emit(first, { type: 'final', seq: 0, text: 'STALE_FINAL' });
+  emit(first, { type: 'partial', seq: 99, confirmed: '', tentative: 'STALE_PARTIAL' });
+  expect(state).toBe(interrupted);
+  emit(second, { type: 'partial', seq: 0, confirmed: '', tentative: 'Yeni taslak' });
+  expect(state.lines.at(-1)).toMatchObject({ seq: 0, text: 'Yeni taslak', status: 'draft' });
+  second.onclose?.({ code: 1006 }); // No final at all on the second bridge.
+  expect(state.lines.at(-1)?.status).toBe('interrupted');
+  await jest.advanceTimersByTimeAsync(1000);
+  emit(third, { type: 'ready' });
+  const next = { type: 'final', seq: 0, text: 'Saat on bir olacak.' };
+  emit(third, next);
+  const beforeReplay = state;
+  emit(third, next); expect(state).toBe(beforeReplay);
+  emit(second, { type: 'final', seq: 0, text: 'STALE_SECOND' });
+  expect(state).toBe(beforeReplay);
+  emit(third, { ...next, text: 'Saat on iki olacak.' });
+  expect(state.lines.map(line => [line.connectionId, line.seq, line.text, line.status])).toEqual([
+    [1, 0, 'İlk görev.', 'final'], [1, 1, 'İkinci görev.', 'final'], [1, 2, 'Yarım cümle', 'interrupted'],
+    [3, 0, 'Yeni taslak', 'interrupted'], [5, 0, 'Saat on iki olacak.', 'revised'],
+  ]);
+  expect(ready).toHaveBeenCalledTimes(1);
+  expect(fail).not.toHaveBeenCalled();
   client.dispose(); expect(jest.getTimerCount()).toBe(0);
 });
 
@@ -197,7 +248,7 @@ test('EOF sonrası gelen final metni alır, yalnız drained ile başarı döner'
   const result = client.stop();
   expect(socket.send).toHaveBeenCalledWith('{"type":"eof"}');
   event({ type: 'final', seq: 0, text: 'Merhaba' });
-  expect(text).toHaveBeenCalledWith({ seq: 0, text: 'Merhaba', final: true });
+  expect(text).toHaveBeenCalledWith({ connectionId: 1, seq: 0, text: 'Merhaba', final: true });
   event({ type: 'drained' }); expect(await result).toBe(true);
 });
 test('drain zaman aşımını başarılı test olarak sunmaz', async () => {

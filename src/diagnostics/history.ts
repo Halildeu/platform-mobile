@@ -16,6 +16,7 @@ const kinds = {
   stage: 'Başlatma aşaması', capture_started: 'Mikrofon başladı', capture_stopped: 'Mikrofon durduruluyor',
   session: 'Ses oturumu oluşturuldu', transport: 'Ses taşıma sayaçları',
   transcript: 'Kesin metin olayı', analysis: 'Analiz sonucu alındı',
+  transcript_connection_closed: 'Metin bağlantısı kesildi',
   analysis_stream: 'Analiz bağlantısı durumu', app_active: 'Uygulama önde',
   app_background: 'Uygulama arka planda', app_inactive: 'Uygulama geçici olarak etkin değil',
   saved_requested: 'Kalıcı sonuç istendi', saved_received: 'Kalıcı sonuç ve toplantı eşleşmesi doğrulandı',
