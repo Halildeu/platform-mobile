@@ -119,3 +119,33 @@ were not changed by this mobile fix.
 Tracking: existing mobile issue #5 and draft PR47. Adding issue #5 to Project #4
 was attempted but the installed GitHub token lacks the `project` scope. Board
 registration is unverified; credentials/permissions were not changed.
+
+## 28 September: saved-result refresh misses a recoverable closure
+
+A separate reproducible path does not require a reconnect. `completeCapture(true)`
+saves the real drained proof before refreshing authentication and calling gateway
+finish. A refresh failure or a lost finish response leaves `completion: confirmed`
+and `endedAt: null` in SecureStore. Previously `persistedResult` retried only when
+`endedAt` was already present, skipping the pending gateway step. The pending-record
+panel and a same-meeting start could already retry; Saved refresh could not.
+
+Saved refresh now retries the selected meeting's confirmed receipt with the original
+idempotency key, checks the terminal acknowledgement, then synchronizes canonical
+lifecycle before reading the result. The active-microphone check is inside the
+lifecycle queue. Unknown/abandoning receipts cannot gain completion proof. Legacy
+terminal receipts retain read-only reconciliation. Buffer-loss, ownership and other
+meeting guards remain in force. No content storage or new recording is introduced.
+
+Regression: four failures reproduced before the fix; all 84 lifecycle tests and the
+complete 54-suite / 575-test run pass after it. The lost-response test retries a
+confirmed gateway finish using `alreadyFinished: true` and the same key. Token
+renewal failure, storage-loaded proof, active other meetings with/without terminal
+timestamps, legacy reads, unknown receipts and all buffer journal states are covered.
+TypeScript and ESLint pass. Independent plan/final review AGREE; reviewer independently
+ran the 84 lifecycle tests. Storage-loaded proof is not a physical process-restart
+test. No new APK, native acceptance or runtime deployment is claimed for this change.
+
+This is NOT a repair of the user's unverified reconnect closure, nor of the task
+analysis. `completion: unknown` still needs the explicit incomplete-result product
+path described above. A successful lifecycle retry also does not mean final analysis
+has finished; the result endpoint remains authoritative.

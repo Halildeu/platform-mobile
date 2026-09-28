@@ -256,8 +256,14 @@ export async function persistedResult(meetingId: string) {
   const session = await validSession(30000);
   await orderedLifecycle(async () => {
     const pending = await readLifecycle(session.jwt, undefined, meetingId);
-    // Only a confirmed finish is replayed while reading; never stop an active capture.
-    if (pending?.meetingId === meetingId && pending.endedAt !== null && !pending.abandon) await finishPending(session.jwt, pending);
+    // Drain proof is saved BEFORE token renewal / the gateway finish response.
+    // A lost response therefore leaves endedAt=null and still needs idempotent replay.
+    // Legacy terminal receipts only use finishPending's read-only reconciliation.
+    if (!activeLifecycleSession && pending && !pending.abandon
+      && ((pending.version === 2 && pending.completion === 'confirmed')
+        || (pending.version === undefined && pending.endedAt !== null))) {
+      await finishPending(session.jwt, pending);
+    }
   });
   return parsePersistedResult(await request(`/api/v1/admin/meetings/${meetingId}/intelligence/result`, session.jwt), meetingId);
 }
