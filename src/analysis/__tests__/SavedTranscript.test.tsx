@@ -9,7 +9,8 @@ jest.mock('../../audio/liveTestApi', () => ({ savedTranscript: jest.fn(), persis
 jest.mock('../../auth/mobileSession', () => ({ mobileSession: { contentScope: jest.fn(() => 1) } }));
 jest.mock('../nativeResultExport', () => ({ resultExporter: { copy: jest.fn().mockResolvedValue(undefined), pdf: jest.fn().mockResolvedValue(undefined) } }));
 beforeEach(() => { jest.clearAllMocks(); jest.mocked(mobileSession.contentScope).mockReturnValue(1); });
-const doc = (text: string, meetingId = 'A'): SavedTranscriptDocument => ({ meetingId, analysisRunId: 'run', text });
+const doc = (text: string, meetingId = 'A'): SavedTranscriptDocument => ({ meetingId, analysisRunId: 'run', text,
+  recordingOutcome: 'FINISHED', recordingIncompleteReason: null });
 
 test('word-sized stored segments read and export as flowing text, with an exact original option', async () => {
   const original = 'Bugün\nsunum\nhazırlanacak\n.\nZeynep\nhazırlayacak.';

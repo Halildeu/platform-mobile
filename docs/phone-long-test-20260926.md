@@ -73,6 +73,32 @@ delta; native Detox/Maestro/phone acceptance remains open.
 
 ## Saved result still missing: separate unresolved failure
 
+### 2026-09-28: selected transcript closure in screen and exports
+
+The canonical transcript response's recording outcome and reason are now retained,
+using the same strict pair validator as saved analysis results. Missing legacy
+fields normalize to UNKNOWN; contradictory or malformed evidence is rejected.
+Alternate UI loaders are checked before rendering as well. This does not infer
+complete capture from FINISHED or transfer meeting-wide incomplete counts from a
+different analysis result into the selected transcript.
+
+The saved transcript header shows an incomplete/unknown notice, including when
+the text is empty. Copy adds a separate `Kayıt bilgisi` section before `Konuşma
+metni`; PDF uses a separate notice paragraph. Original/readable mode changes only
+the selected text body. Canonical text, hashes, source segments and speaker offsets
+are unchanged. No microphone, closure or diagnostic-capture behavior changed.
+
+Validation: the new regression suite first failed 24 cases before implementation.
+Final full unit run: 55 suites / 625 tests pass; TypeScript and scoped ESLint pass.
+Independent final review AGREE: 10 suites / 113 tests plus TypeScript pass.
+Expo web export passed. A temporary localhost-only harness rendered the actual
+SavedTranscript panel for INCOMPLETE, UNKNOWN, FINISHED and empty legacy content;
+browser checks verified the notice, original/readable switch, copy text and the
+HTML handed to the PDF exporter. The harness used synthetic content and intercepted
+clipboard/PDF calls: this is not native PDF generation or phone acceptance. The
+temporary route was removed before a second successful final web export, which
+was checked not to contain it. No native APK or deployment was produced.
+
 The user subsequently reported `Kaydedilmiş sonuç bulunamadı` from the same
 meeting's Saved result after hours. This is not evidence that processing continues.
 

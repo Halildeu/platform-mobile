@@ -1,7 +1,8 @@
 import { readSpeakerAttributionForDuration, SpeakerNumbering, type SpeakerAttribution } from '../transcript/speakerAttribution';
+import { parseRecordingProvenance, type RecordingProvenance } from './recordingProvenance';
 
 export type SavedTranscriptSegment = { text: string | null; speakerAttribution?: SpeakerAttribution };
-export type SavedTranscriptDocument = {
+export type SavedTranscriptDocument = RecordingProvenance & {
   meetingId: string; analysisRunId: string; text: string; segments?: SavedTranscriptSegment[];
   sessionId?: string; finalizationVersion?: number; transcriptSha256?: string;
 };
@@ -16,7 +17,8 @@ export function parseSavedTranscript(value: unknown, meetingId: string, analysis
       typeof p.transcriptSha256 !== 'string' || !/^[a-f0-9]{64}$/i.test(p.transcriptSha256))
     throw new Error('Konuşma metni seçilen sonuçla eşleşmiyor.');
   const text = p.transcript;
-  return { meetingId, analysisRunId, text, segments: readSegments(p, text),
+  const recording = parseRecordingProvenance(p, () => new Error('Konuşma metninin kayıt durumu doğrulanamadı.'));
+  return { meetingId, analysisRunId, text, segments: readSegments(p, text), ...recording,
     sessionId: typeof p.sessionId === 'string' ? p.sessionId : undefined,
     finalizationVersion: typeof p.finalizationVersion === 'number' ? p.finalizationVersion : undefined,
     transcriptSha256: p.transcriptSha256 };

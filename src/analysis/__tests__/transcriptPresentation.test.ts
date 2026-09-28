@@ -5,6 +5,7 @@ const segment = (text: string, scope = 'scope-A', speaker = 'S1'): SavedTranscri
   speakerAttribution: { scope, turns: [{ speaker, textStart: 0, textEnd: text.length, startMs: 0, endMs: 1000 }] } });
 const doc = (segments: SavedTranscriptSegment[]): SavedTranscriptDocument => ({
   meetingId: 'A', analysisRunId: 'run-A', transcriptSha256: 'a'.repeat(64),
+  recordingOutcome: 'UNKNOWN', recordingIncompleteReason: null,
   text: segments.filter(item => item.text !== null).map(item => item.text).join('\n'), segments,
 });
 
@@ -52,7 +53,7 @@ test('long readable text is virtualized without splitting emoji or changing sour
 });
 
 test('handles legacy payloads, empty text and CRLF on a virtualization boundary', () => {
-  expect(presentSavedTranscript({ meetingId: 'A', analysisRunId: 'run', text: 'Bu\nmetin.' }).text).toBe('Bu metin.');
+  expect(presentSavedTranscript({ ...doc([]), text: 'Bu\nmetin.' }).text).toBe('Bu metin.');
   expect(presentSavedTranscript(doc([]))).toEqual({ text: '', rows: [] });
   const source = 'A'.repeat(1999) + '\r\nB';
   expect(presentSavedTranscript(doc([segment(source)])).text).toBe('A'.repeat(1999) + ' B');

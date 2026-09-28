@@ -7,6 +7,8 @@ import { transcriptHtml } from './exportHtml';
 import { type SavedTranscriptDocument } from './savedTranscript';
 import { SavedSpeakerTranscript } from './SavedSpeakerTranscript';
 import { presentSavedTranscript } from './transcriptPresentation';
+import { parseRecordingProvenance } from './recordingProvenance';
+import { recordingTranscriptNotices, transcriptText } from './transcriptExport';
 
 async function loadTranscript(meetingId: string) {
   const result = await persistedResult(meetingId);
@@ -32,7 +34,8 @@ function TranscriptForMeeting({ meetingId, header, load = loadTranscript }: Prop
     void load(meetingId).then(value => {
       if (!current) return;
       if (owner === null || owner !== mobileSession.contentScope() || value.meetingId !== meetingId) { setError(true); return; }
-      setScope(owner); setDocument(value);
+      const recording = parseRecordingProvenance(value, () => new Error('Konuşma metninin kayıt durumu doğrulanamadı.'));
+      setScope(owner); setDocument({ ...value, ...recording });
     })
       .catch(() => { if (current) setError(true); });
     return () => { current = false; };
@@ -46,15 +49,17 @@ function TranscriptForMeeting({ meetingId, header, load = loadTranscript }: Prop
         <Text style={{ color: '#93c5fd', paddingVertical: 12 }}>Yeniden dene</Text>
       </Pressable>
     </>}
+    {document && recordingTranscriptNotices(document).map(notice =>
+      <Text key={notice} accessibilityRole="alert" style={{ color: '#fbbf24' }}>{notice}</Text>)}
     {text === '' && <Text style={{ color: '#e2e8f0' }}>Bu sonuçta konuşma metni boş.</Text>}
-    {!!text && <>
+    {document && !!text && <>
       <Pressable accessibilityRole="button" disabled={exports.working} onPress={() => setOriginal(value => !value)}>
         <Text style={{ color: '#93c5fd', paddingVertical: 12 }}>{original ? 'Okunabilir metni göster' : 'Orijinal metni göster'}</Text>
       </Pressable>
-      <Pressable accessibilityRole="button" disabled={exports.working} onPress={() => void exports.copy(text)}>
+      <Pressable accessibilityRole="button" disabled={exports.working} onPress={() => void exports.copy(transcriptText(text, document))}>
         <Text style={{ color: '#93c5fd', paddingVertical: 12 }}>Metnin tamamını kopyala</Text>
       </Pressable>
-      <Pressable accessibilityRole="button" disabled={exports.working} onPress={() => void exports.pdf(transcriptHtml(text))}>
+      <Pressable accessibilityRole="button" disabled={exports.working} onPress={() => void exports.pdf(transcriptHtml(text, document))}>
         <Text style={{ color: '#93c5fd', paddingVertical: 12 }}>Kaydedilmiş metni PDF olarak paylaş</Text>
       </Pressable>
     </>}

@@ -7,6 +7,7 @@ jest.mock('../../audio/liveTestApi', () => ({ savedSpeakerLabels: jest.fn() }));
 jest.mock('../../auth/mobileSession', () => ({ mobileSession: { contentScope: jest.fn(() => 1) } }));
 const id = (n: number) => `${String(n).repeat(8)}-${String(n).repeat(4)}-4${String(n).repeat(3)}-8${String(n).repeat(3)}-${String(n).repeat(12)}`;
 const doc: SavedTranscriptDocument = { meetingId: id(1), analysisRunId: id(2), sessionId: id(3),
+  recordingOutcome: 'UNKNOWN', recordingIncompleteReason: null,
   finalizationVersion: 1, transcriptSha256: 'a'.repeat(64), text: 'Bir. İki.', segments: [{ text: 'Bir. İki.',
     speakerAttribution: { scope: id(4), turns: [
       { speaker: 'S7', textStart: 0, textEnd: 4, startMs: 0, endMs: 400 },
