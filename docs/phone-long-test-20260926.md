@@ -149,3 +149,24 @@ This is NOT a repair of the user's unverified reconnect closure, nor of the task
 analysis. `completion: unknown` still needs the explicit incomplete-result product
 path described above. A successful lifecycle retry also does not mean final analysis
 has finished; the result endpoint remains authoritative.
+
+## 28 September: preserve closure provenance on each saved result
+
+Backend PR1177 now binds UNKNOWN/FINISHED/INCOMPLETE and its bounded reason to the
+immutable transcript snapshot, signed capability and stored analysis run. AI PR356
+accepts that coordinated contract. The mobile parser treats omitted legacy fields
+as UNKNOWN, validates explicit field pairs and retains the selected result marker.
+The Saved screen, copied/shared Markdown and result PDF now show the same qualified
+notice. A selected incomplete result is identified even if the meeting-wide count
+is zero. A FINISHED marker does not guarantee every audio sample was captured; the
+warning for another incomplete recording in the same meeting is retained.
+
+Affected root checks passed: seven suites / 166 tests, TypeScript and targeted
+ESLint. Independent final review AGREE: five suites / 161 tests and TypeScript;
+after the final strict own-property repair, all 23 parser tests passed separately.
+The reviewer regression rejects a reason inherited from an object prototype.
+
+These are source/contract checks, not native or physical phone acceptance. No APK
+was built or distributed for this delta. The explicit empty/failed-source response,
+actual recovery of meeting 826eb40a and action/decision semantics remain open.
+This change neither reconstructs missing history nor fixes the orphan time/date.

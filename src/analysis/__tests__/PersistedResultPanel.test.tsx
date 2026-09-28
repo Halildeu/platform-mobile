@@ -9,6 +9,7 @@ jest.mock('../nativeResultExport', () => ({ resultExporter: { copy: jest.fn().mo
 jest.mock('expo-print', () => ({ printAsync: jest.fn().mockResolvedValue(undefined) }));
 jest.mock('../../audio/liveTestApi', () => ({ persistedResult: jest.fn() }));
 const result = (meetingId: string): PersistedResult => ({ meetingId, analysisRunId: 'run', sessionId: 'SES-1', generatedAt: '2026-09-10',
+  recordingOutcome: 'UNKNOWN', recordingIncompleteReason: null,
   summary: 'Kalıcı özet', decisions: [], actions: [], sources: [{ claim: 'Karar', text: 'Kaynak alıntısı', startSec: 12 }] });
 
 test('exports the loaded saved result without inventing a live version', async () => {
@@ -35,6 +36,27 @@ test('shows automatic restore failures and records diagnostics rather than a bla
   expect(screen.getByText('Kalıcı sonuç 404')).toBeTruthy();
   expect(onDiagnostic).toHaveBeenLastCalledWith('Kalıcı sonuç 404');
 });
+
+test.each(['UNKNOWN', 'FINISHED', 'INCOMPLETE'] as const)(
+  'screen and copy/PDF carry selected %s provenance without hiding meeting scope', async recordingOutcome => {
+    const selected: PersistedResult = { ...result('A'), recordingOutcome,
+      recordingIncompleteReason: recordingOutcome === 'INCOMPLETE' ? 'CLOSURE_UNCONFIRMED' : null,
+      incompleteRecordingCount: 1 };
+    const screen = render(<PersistedResultPanel meetingId="A" load={async () => selected} />);
+    await act(async () => {});
+    const notice = recordingOutcome === 'INCOMPLETE'
+      ? 'Bu sonuç eksik kapatılan kayıttan oluşturuldu; konuşmanın tamamını kapsamayabilir.'
+      : recordingOutcome === 'UNKNOWN'
+        ? 'Bu kaydın kapanış durumu doğrulanamadı; sonuç konuşmanın tamamını kapsamayabilir.'
+        : 'Bu toplantıda eksik kapatılan kayıt var; sonuç konuşmanın tamamını kapsamayabilir.';
+    expect(screen.getByText(notice)).toBeTruthy();
+    expect(screen.queryAllByText('Bu toplantıda eksik kapatılan kayıt var; sonuç konuşmanın tamamını kapsamayabilir.'))
+      .toHaveLength(recordingOutcome === 'INCOMPLETE' ? 0 : 1);
+    await act(async () => fireEvent.press(screen.getByText('Kaydedilmiş sonucun tamamını kopyala')));
+    expect(resultExporter.copy).toHaveBeenLastCalledWith(expect.stringContaining(notice.slice(0, -1)), expect.any(Function));
+    await act(async () => fireEvent.press(screen.getByText('Kaydedilmiş sonucu PDF olarak paylaş')));
+    expect(resultExporter.pdf).toHaveBeenLastCalledWith(expect.stringContaining(notice), expect.any(Function));
+  });
 test('keeps the current result while refreshing but clears it if access fails', async () => {
   let rejectRefresh!: (error: Error) => void;
   const load = jest.fn().mockResolvedValueOnce(result('A')).mockImplementationOnce(() =>

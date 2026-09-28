@@ -370,7 +370,7 @@ it('defers a different notification meeting while recording and applies it after
 it('restores canonical full text in Metin even when a partial navigation cache exists', async () => {
   saveMeetingView('meeting-1', { lines: [{ seq: 1, text: 'PARTIAL_CACHE', confirmed: 'PARTIAL_CACHE', tentative: '', status: 'final' }], analysis: null, diagnostics: [] });
   jest.mocked(api.restoreSession).mockResolvedValue({ jwt: 'test-only', expiresAt: Date.now() + 600000 });
-  jest.mocked(api.persistedResult).mockResolvedValue({ analysisRunId: 'run-1', meetingId: 'meeting-1', sessionId: 'session-1', generatedAt: '2026-09-18T10:00:00Z', summary: '', decisions: [], actions: [], sources: [] });
+  jest.mocked(api.persistedResult).mockResolvedValue({ analysisRunId: 'run-1', meetingId: 'meeting-1', sessionId: 'session-1', generatedAt: '2026-09-18T10:00:00Z', summary: '', decisions: [], actions: [], sources: [], recordingOutcome: 'UNKNOWN', recordingIncompleteReason: null });
   jest.mocked(api.savedTranscript).mockResolvedValue({ meetingId: 'meeting-1', analysisRunId: 'run-1', text: 'FULL_SAVED_TRANSCRIPT' });
   const screen = render(<LiveTestScreen />);
   await waitFor(() => expect(screen.getByText('Test toplantısı')).toBeTruthy());
@@ -489,6 +489,7 @@ it('shows the reopened meeting server result in each analysis tab, replacing an 
   jest.mocked(api.persistedResult).mockImplementation(async id => {
     if (id !== 'meeting-1') throw new Error('Sonuç bulunamadı');
     return { meetingId: id, analysisRunId: 'run-1', sessionId: 'session-1', generatedAt: '2026-09-21', summary: 'Kayıtlı özet',
+      recordingOutcome: 'UNKNOWN', recordingIncompleteReason: null,
       decisions: ['Kayıtlı karar'], actions: [{ text: 'Dosyayı hazırla', owner: 'Zeynep', dueDate: '2026-09-22' }], sources: [] };
   });
   const screen = render(<LiveTestScreen />);
