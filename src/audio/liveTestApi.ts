@@ -5,6 +5,7 @@ import { requestFailure } from './requestFailure';
 import { mobileSession } from '../auth/mobileSession';
 import { SessionExpired } from '../auth/sessionManager';
 import { parsePersistedResult } from '../analysis/persistedResult';
+import { canonicalId, parseRecordingChoices, parseProcessingStatus, ProcessingStatusReadError } from '../analysis/processingStatus';
 import { parseSavedTranscript, type SavedTranscriptDocument } from '../analysis/savedTranscript';
 import { parseSpeakerLabels, validSpeakerDocument, type SpeakerLabelEdit } from '../analysis/speakerLabels';
 import { disableNativePush } from '../notifications/nativePush';
@@ -211,6 +212,8 @@ async function request(path: string, jwt: string, body?: object, key?: string, m
   const utc = new Date().toISOString();
   const stage = path === '/api/v1/admin/meetings' ? 'Yeni toplantı oluşturma'
     : path.startsWith('/api/v1/admin/meetings?') ? 'Toplantı listesi'
+      : path.endsWith('/processing-status') ? 'Kayıt durumu'
+        : path.endsWith('/sessions') && path.startsWith('/api/v1/admin/meetings/') ? 'Toplantı kayıtları'
       : path.endsWith('/consents') ? 'Kayıt onayı'
         : path.endsWith('/finish') ? 'Kayıt kapanışı'
           : path.endsWith('/speaker-labels') ? 'Konuşmacı adı'
@@ -232,6 +235,9 @@ async function request(path: string, jwt: string, body?: object, key?: string, m
         await mobileSession.reject(jwt);
         throw new SessionExpired();
       }
+      if (path.endsWith('/processing-status') || (path.endsWith('/sessions') && path.startsWith('/api/v1/admin/meetings/'))) {
+        throw new ProcessingStatusReadError(response.status);
+      }
       const payload: unknown = await response.json().catch(() => null);
       const details = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
       if (allowMissingSession && response.status === 404 && details.code === 'AUDIO_GATEWAY_SESSION_NOT_FOUND') return ABSENT_GATEWAY_RECEIPT;
@@ -245,6 +251,25 @@ async function request(path: string, jwt: string, body?: object, key?: string, m
 }
 
 export interface Meeting { id: string; title: string }
+/** Read-only metadata helpers: never reconcile, finish or abandon a recording. */
+export async function recordingChoices(meetingId: string, owner: number) {
+  if (!canonicalId(meetingId)) throw new Error('Geçersiz toplantı.');
+  if (mobileSession.contentScope() !== owner) throw new SessionExpired();
+  const session = await validSession(30000);
+  if (mobileSession.contentScope() !== owner) throw new SessionExpired();
+  const value = await request(`/api/v1/admin/meetings/${meetingId}/sessions`, session.jwt);
+  if (mobileSession.contentScope() !== owner) throw new SessionExpired();
+  return parseRecordingChoices(value, meetingId);
+}
+export async function processingStatus(meetingId: string, sessionId: string, owner: number) {
+  if (!canonicalId(meetingId) || !canonicalId(sessionId)) throw new Error('Geçersiz toplantı kaydı.');
+  if (mobileSession.contentScope() !== owner) throw new SessionExpired();
+  const session = await validSession(30000);
+  if (mobileSession.contentScope() !== owner) throw new SessionExpired();
+  const value = await request(`/api/v1/admin/meetings/${meetingId}/sessions/${sessionId}/processing-status`, session.jwt);
+  if (mobileSession.contentScope() !== owner) throw new SessionExpired();
+  return parseProcessingStatus(value, meetingId, sessionId);
+}
 export async function savedTranscript(meetingId: string, analysisRunId: string): Promise<SavedTranscriptDocument> {
   const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
   if (!uuid.test(meetingId) || !uuid.test(analysisRunId)) throw new Error('Geçersiz toplantı sonucu.');

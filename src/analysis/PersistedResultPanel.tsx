@@ -8,6 +8,7 @@ import type { PersistedResult } from './persistedResult';
 import { recordingResultNotices } from './recordingResultNotices';
 import { mobileSession } from '../auth/mobileSession';
 import { useResultExport } from './useResultExport';
+import { ProcessingStatusPanel } from './ProcessingStatusPanel';
 
 
 type Props = {
@@ -74,6 +75,7 @@ function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic, sec
       <Text style={styles.link}>{busy ? 'Sonuç okunuyor…' : 'Kalıcı sonucu aç / yenile'}</Text>
     </Pressable>
     {!!error && <Text accessibilityRole="alert" style={styles.text}>{error}</Text>}
+    <ProcessingStatusPanel meetingId={meetingId} />
     {result && <>
       {recordingResultNotices(result).map(notice => <Text key={notice} accessibilityRole="alert" style={styles.text}>{notice}</Text>)}
       <Text style={styles.text}>Oluşturulma: {result.generatedAt}</Text>
