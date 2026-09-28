@@ -23,7 +23,7 @@ import {
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 
-import type { TranscriptLine } from './transcriptState';
+import { transcriptLineKey, type TranscriptLine } from './transcriptState';
 import { SpeakerNumbering } from './speakerAttribution';
 
 /** Anonymous labels are comparable only inside the same audio scope. */
@@ -44,8 +44,10 @@ export function transcriptParagraphs(lines: readonly TranscriptLine[]): Transcri
   let length = 0;
   for (const line of lines) {
     const previous = current.at(-1);
-    if (previous && (previous.speakerAttribution || line.speakerAttribution) &&
-        (!singleSpeaker(line) || singleSpeaker(previous) !== singleSpeaker(line))) {
+    if (previous && ((previous.connectionId ?? 0) !== (line.connectionId ?? 0) ||
+        previous.status === 'interrupted' || line.status === 'interrupted' ||
+        ((previous.speakerAttribution || line.speakerAttribution) &&
+        (!singleSpeaker(line) || singleSpeaker(previous) !== singleSpeaker(line))))) {
       paragraphs.push(current);
       current = []; length = 0;
     }
@@ -112,7 +114,7 @@ export function TranscriptView({
       ListHeaderComponent={header}
       ListEmptyComponent={<View style={styles.empty}><Text style={styles.emptyText}>{t('transcript.waiting')}</Text></View>}
       keyboardShouldPersistTaps="handled"
-      keyExtractor={(paragraph) => String(paragraph[0].seq)}
+      keyExtractor={(paragraph) => transcriptLineKey(paragraph[0])}
       contentContainerStyle={styles.content}
       onScroll={onScroll}
       onContentSizeChange={() => { if (lines.length && autoScroll && pinnedToBottom) listRef.current?.scrollToEnd({ animated: true }); }}
@@ -120,7 +122,7 @@ export function TranscriptView({
       renderItem={({ item }) => (
         <View style={styles.row}>
           <Text selectable style={styles.text}>{item.map((line, index) => (
-            <Text key={line.seq} style={styles[line.status]}>
+            <Text key={transcriptLineKey(line)} style={styles[line.status]}>
               {index > 0 && !/^[,.;:!?…]/.test(line.text) ? ' ' : ''}
               {line.speakerAttribution ? line.speakerAttribution.turns.map((turn, turnIndex, turns) => {
                 const speaker = speakers.number(line.speakerAttribution!.scope, turn.speaker);
@@ -140,6 +142,7 @@ export function TranscriptView({
           ))}</Text>
           {item.some(line => line.status === 'stabilizing') && <Text style={styles.revisedTag}> · {t('transcript.stabilizingTag')}</Text>}
           {item.some(line => line.status === 'revised') && <Text style={styles.revisedTag}> · {t('transcript.revisedTag')}</Text>}
+          {item.some(line => line.status === 'interrupted') && <Text style={styles.revisedTag}> · {t('transcript.interruptedTag')}</Text>}
         </View>
       )}
     />
@@ -155,6 +158,7 @@ const styles = StyleSheet.create({
   stabilizing: { color: '#94a3b8' },
   final: { color: '#e2e8f0' },
   revised: { color: '#e2e8f0' },
+  interrupted: { color: '#94a3b8', fontStyle: 'italic' },
   revisedTag: { fontSize: 12, color: '#f59e0b' },
   speakerTag: { fontSize: 13, color: '#93c5fd' },
   empty: { minHeight: 160, alignItems: 'center', justifyContent: 'center' },

@@ -6,6 +6,7 @@ jest.mock('../../auth/mobileSession', () => ({ mobileSession: { valid: jest.fn()
 jest.mock('../../notifications/nativePush', () => ({ disableNativePush: jest.fn() }));
 const id = '11111111-1111-4111-8111-111111111111';
 const doc: SavedTranscriptDocument = { meetingId: id, analysisRunId: id, sessionId: id,
+  recordingOutcome: 'UNKNOWN', recordingIncompleteReason: null,
   finalizationVersion: 1, transcriptSha256: 'a'.repeat(64), text: 'Test', segments: [{ text: 'Test',
     speakerAttribution: { scope: id, turns: [{ speaker: 'S1', textStart: 0, textEnd: 4, startMs: 0, endMs: 500 }] } }] };
 const wire = { meetingId: id, analysisRunId: id, sessionId: id, finalizationVersion: 1,

@@ -35,6 +35,17 @@ drained event cannot establish completion of all earlier audio (ADR0018).
 - Canonical result reads include incompleteRecordingCount across the whole meeting,
   not only the selected result session. Screen, Markdown and result PDF warn when
   another recording is incomplete. Missing count from an older server remains unknown.
+- Each selected result also has recordingOutcome and recordingIncompleteReason,
+  taken by the backend from its signed immutable transcript occurrence. The parser
+  accepts legacy omission of both fields as UNKNOWN. UNKNOWN/FINISHED allow absent
+  or null reason; INCOMPLETE requires CLOSURE_UNCONFIRMED. Null/undefined/invalid
+  outcomes, orphan reasons and malformed pairs withhold the response.
+- Saved screen, copied/shared Markdown and result PDF use the same notice: UNKNOWN
+  means unverified closure, INCOMPLETE identifies the selected result's incomplete
+  source. FINISHED makes no guarantee that all sound was captured. A meeting-wide
+  warning is retained for other incomplete recordings, without duplicating the
+  result-specific incomplete warning. New backend and compatible AI reader must
+  be deployed in their documented order (backend PR1177, AI PR356).
 
 ## Privacy and compatibility
 

@@ -5,6 +5,7 @@ import { analysisHtml } from './exportHtml';
 import { analysisMarkdown } from './exportMarkdown';
 import { persistedResult } from '../audio/liveTestApi';
 import type { PersistedResult } from './persistedResult';
+import { recordingResultNotices } from './recordingResultNotices';
 import { mobileSession } from '../auth/mobileSession';
 import { useResultExport } from './useResultExport';
 
@@ -74,7 +75,7 @@ function ResultForMeeting({ meetingId, load = persistedResult, onDiagnostic, sec
     </Pressable>
     {!!error && <Text accessibilityRole="alert" style={styles.text}>{error}</Text>}
     {result && <>
-      {!!result.incompleteRecordingCount && <Text accessibilityRole="alert" style={styles.text}>Bu toplantıda eksik kapatılan kayıt var; sonuç konuşmanın tamamını kapsamayabilir.</Text>}
+      {recordingResultNotices(result).map(notice => <Text key={notice} accessibilityRole="alert" style={styles.text}>{notice}</Text>)}
       <Text style={styles.text}>Oluşturulma: {result.generatedAt}</Text>
       <Text selectable style={styles.text}>Oturum: {result.sessionId}</Text>
 

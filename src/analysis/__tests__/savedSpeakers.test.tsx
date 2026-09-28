@@ -85,7 +85,9 @@ test('saved speaker labels survive a new mount; copy and PDF keep the immutable 
   const rows = screen.UNSAFE_getByType(FlatList).props.data as SavedTranscriptRow[];
   expect(rows.map(row => row.text).join('')).toBe(original.transcript);
   await act(async () => fireEvent.press(screen.getByText('Metnin tamamını kopyala')));
-  expect(resultExporter.copy).toHaveBeenCalledWith(original.transcript, expect.any(Function));
+  expect(resultExporter.copy).toHaveBeenCalledWith(
+    'Kayıt bilgisi\nBu kaydın kapanış durumu doğrulanamadı; metin konuşmanın tamamını kapsamayabilir.\n\nKonuşma metni\n' + original.transcript,
+    expect.any(Function));
   await act(async () => fireEvent.press(screen.getByText('Kaydedilmiş metni PDF olarak paylaş')));
   expect(jest.mocked(resultExporter.pdf).mock.calls[0][0]).toContain('&lt;b&gt;İş 📝&lt;/b&gt;\nBitti');
 });

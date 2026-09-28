@@ -1,4 +1,6 @@
-export interface PersistedResult {
+import { parseRecordingProvenance, type RecordingProvenance } from './recordingProvenance';
+
+export interface PersistedResult extends RecordingProvenance {
   analysisRunId: string; meetingId: string; sessionId: string; generatedAt: string;
   summary: string; decisions: string[]; incompleteRecordingCount?: number;
   actions: { text: string; owner: string | null; dueDate: string | null }[];
@@ -20,6 +22,7 @@ export function parsePersistedResult(value: unknown, meetingId: string): Persist
       !text(p.summary) || !list(p.decisions) || !p.decisions.every(text) ||
       !list(p.action_items) || !list(p.citations) || !list(p.summary_citations)) throw invalid();
   if (p.incompleteRecordingCount !== undefined && (!Number.isSafeInteger(p.incompleteRecordingCount) || (p.incompleteRecordingCount as number) < 0)) throw invalid();
+  const recording = parseRecordingProvenance(p, invalid);
   const actions: PersistedResult['actions'] = p.action_items.map((item) => {
     if (!item || typeof item !== 'object') throw invalid();
     const a = item as Record<string, unknown>;
@@ -39,5 +42,6 @@ export function parsePersistedResult(value: unknown, meetingId: string): Persist
   }
   return { analysisRunId: p.analysisRunId, meetingId, sessionId: p.sessionId, generatedAt: p.generatedAt,
     summary: ['verified', 'partial_verified'].includes(String(p.summary_grounding_status)) ? p.summary : '',
-    decisions: p.decisions as string[], actions, sources, incompleteRecordingCount: p.incompleteRecordingCount as number | undefined };
+    decisions: p.decisions as string[], actions, sources, incompleteRecordingCount: p.incompleteRecordingCount as number | undefined,
+    ...recording };
 }

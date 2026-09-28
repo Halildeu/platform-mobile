@@ -121,4 +121,30 @@ describe('transcriptState', () => {
     const state = fold([partial(0, 'sadece bu', '')]);
     expect(state.lines[0].text).toBe('sadece bu');
   });
+
+  it('reused sequence numbers belong to different connections; late revisions stay in their original position', () => {
+    const state = applyTranscriptEvents(initialTranscriptState(), [
+      { ...final(1, 'B'), connectionId: 1 }, { ...final(0, 'A'), connectionId: 1 },
+      { ...partial(0, '', 'C'), connectionId: 3 },
+      { ...final(0, 'C'), connectionId: 3 }, { ...final(0, 'A revised'), connectionId: 1 },
+    ]);
+    expect(state.lines.map(line => [line.connectionId, line.seq, line.text, line.status])).toEqual([
+      [1, 0, 'A revised', 'revised'], [1, 1, 'B', 'final'], [3, 0, 'C', 'final'],
+    ]);
+    expect(applyTranscriptEvent(state, { ...partial(0, '', 'late'), connectionId: 3 })).toBe(state);
+  });
+
+  it('connection loss preserves uncertain text without calling it finalized or changing other connections', () => {
+    const before = applyTranscriptEvents(initialTranscriptState(), [
+      { ...final(0, 'Final'), connectionId: 1 }, { ...partial(1, '', 'Uncertain'), connectionId: 1 },
+      { ...partial(0, 'New', 'draft'), connectionId: 3 },
+    ]);
+    const after = applyTranscriptEvent(before, { type: 'connection_interrupted', connectionId: 1 });
+    expect(after.lines.map(line => line.status)).toEqual(['final', 'interrupted', 'stabilizing']);
+    expect(after.lines[1].text).toBe('Uncertain');
+    expect(after.lines[0]).toBe(before.lines[0]); expect(after.lines[2]).toBe(before.lines[2]);
+    expect(applyTranscriptEvent(after, { type: 'connection_interrupted', connectionId: 1 })).toBe(after);
+    expect(applyTranscriptEvent(after, { ...partial(1, '', 'late'), connectionId: 1 })).toBe(after);
+    expect(applyTranscriptEvent(after, { ...final(1, 'late final'), connectionId: 1 })).toBe(after);
+  });
 });

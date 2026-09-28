@@ -2,7 +2,12 @@ import { encodeGatewayLivePcm16Frame } from './gatewayFrame';
 import { OfflineAudioBuffer } from './offlineBuffer';
 import { readSpeakerAttribution, type SpeakerAttribution } from '../transcript/speakerAttribution';
 
-export interface LiveText { seq: number; text: string; final: boolean; confirmed?: string; tentative?: string; speakerAttribution?: SpeakerAttribution }
+export interface LiveText {
+  /** Client-local socket generation within this recording; never a provider source epoch. */
+  connectionId?: number;
+  seq: number; text: string; final: boolean; confirmed?: string; tentative?: string;
+  speakerAttribution?: SpeakerAttribution; sourceStartSample?: number; sourceEndSample?: number;
+}
 export interface LiveSocket {
   readyState: number;
   bufferedAmount: number;
@@ -84,7 +89,11 @@ export class ForegroundStream {
     private readonly onText: (text: LiveText) => void,
     private readonly onFailure: (message: string) => void,
     private readonly buffer?: OfflineAudioBuffer,
-    private readonly recovery?: { connect(): Promise<LiveSocket>; onStatus(message: string): void },
+    private readonly recovery?: {
+      connect(): Promise<LiveSocket>;
+      onStatus(message: string): void;
+      onConnectionInterrupted?(connectionId: number): void;
+    },
   ) {
     this.bind(socket);
   }
@@ -208,7 +217,10 @@ export class ForegroundStream {
   }
 
   private closed(code?: number): void {
-    if (this.everReady) this.continuityLost = true;
+    if (this.everReady) {
+      this.continuityLost = true;
+      this.recovery?.onConnectionInterrupted?.(this.connectionGeneration);
+    }
     this.telemetry.closeCode = Number.isInteger(code) ? code! : 0;
     if (this.recovery && this.buffer && this.everReady && !this.stopping && (code === 1006 || code === undefined) && this.retries < 3) {
       this.ready = false; this.reconnecting = true; this.transportError = true;
@@ -285,11 +297,14 @@ export class ForegroundStream {
     } else if (Number.isSafeInteger(event.seq) && (event.seq as number) >= 0) {
       if (event.type === 'partial' && typeof event.confirmed === 'string' && typeof event.tentative === 'string') {
         this.telemetry.partialEvents++; this.telemetry.lastTextUtc = new Date().toISOString();
-        this.onText({ seq: event.seq as number, text: [event.confirmed, event.tentative].filter(Boolean).join(' '), final: false, confirmed: event.confirmed, tentative: event.tentative });
+        this.onText({ connectionId: this.connectionGeneration, seq: event.seq as number, text: [event.confirmed, event.tentative].filter(Boolean).join(' '), final: false, confirmed: event.confirmed, tentative: event.tentative });
       } else if (event.type === 'final' && typeof event.text === 'string') {
         this.telemetry.finalEvents++; this.telemetry.lastTextUtc = new Date().toISOString();
         const speakerAttribution = readSpeakerAttribution(event.speakerAttribution, event.text, event.source_start_sample, event.source_end_sample);
-        this.onText({ seq: event.seq as number, text: event.text, final: true,
+        const validRange = Number.isSafeInteger(event.source_start_sample) && Number.isSafeInteger(event.source_end_sample) &&
+          (event.source_start_sample as number) >= 0 && (event.source_end_sample as number) > (event.source_start_sample as number);
+        this.onText({ connectionId: this.connectionGeneration, seq: event.seq as number, text: event.text, final: true,
+          ...(validRange ? { sourceStartSample: event.source_start_sample as number, sourceEndSample: event.source_end_sample as number } : {}),
           ...(speakerAttribution ? { speakerAttribution } : {}) });
       }
     }

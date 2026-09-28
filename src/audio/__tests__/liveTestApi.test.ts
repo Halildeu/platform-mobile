@@ -15,19 +15,20 @@ const linked = { ...receipt, sessionId: requestId, meetingStatus: 'IN_PROGRESS',
 let stored: string | null = null;
 beforeEach(() => {
   stored = JSON.stringify(receipt);
+  jest.spyOn(mobileSession, 'valid').mockResolvedValue({ jwt, expiresAt: Date.now() + 60000 });
   jest.spyOn(SecureStore, 'getItemAsync').mockImplementation(async readKey => readKey === key ? stored : null);
   jest.spyOn(SecureStore, 'setItemAsync').mockImplementation(async (_key, value) => { stored = value; });
   jest.spyOn(SecureStore, 'deleteItemAsync').mockImplementation(async () => { stored = null; });
 });
 afterEach(() => { jest.restoreAllMocks(); });
 
-it.each(['creating', 'ready', 'lost', 'deleting'])('refuses HTTP finish before durable buffer recovery: %s', async state => {
+it.each(['creating', 'ready', 'lost', 'deleting'].flatMap(state => ['finish', 'saved'].map(path => ({ state, path }))))('refuses HTTP finish before durable buffer recovery: %j', async ({ state, path }) => {
   const id = createHash('sha256').update(JSON.stringify([ownerHash, receipt.externalSessionId])).digest('hex');
   const journal = JSON.stringify({ version: 1, records: [{ id, ownerHash, sessionId: receipt.externalSessionId,
     retentionMs: 1000, state, ...(state === 'deleting' ? { outcome: 'lost' } : {}) }] });
   jest.spyOn(SecureStore, 'getItemAsync').mockImplementation(async name => name === BUFFER_JOURNAL_KEY ? journal : stored);
   const fetchMock = jest.spyOn(global, 'fetch');
-  await expect(finish(jwt, receipt.externalSessionId)).rejects.toThrow('Bekleyen veya eksik');
+  await expect(path === 'saved' ? persistedResult(meetingId) : finish(jwt, receipt.externalSessionId)).rejects.toThrow('Bekleyen veya eksik');
   expect(fetchMock).not.toHaveBeenCalled();
   expect(stored).toBe(JSON.stringify(receipt));
 });
@@ -271,6 +272,62 @@ it('replays only the persisted finish before reading the same meeting after reop
   expect(stored).toBeNull();
 });
 
+it('saved refresh replays a lost gateway finish response with the original idempotency key', async () => {
+  stored = null;
+  const calls = jest.spyOn(global, 'fetch')
+    .mockResolvedValueOnce(ok({ meetingId, captureId: requestId, consentTextHash: 'sha256:test-hash' }))
+    .mockResolvedValueOnce(ok({ sessionId: receipt.externalSessionId, sessionStartMs: Date.parse(startedAt), sttProvider: 'speechmatics', transcriptionMode: 'realtime' }))
+    .mockResolvedValueOnce(ok(linked))
+    .mockRejectedValueOnce(new Error('gateway response lost'));
+  await begin(jwt, meetingId);
+  await expect(completeCapture(jwt, receipt.externalSessionId, true)).rejects.toThrow();
+  expect(JSON.parse(stored!)).toEqual(receipt); // Drain proof survives; no terminal timestamp yet.
+  const endedAt = new Date(finished.finishedAtMs).toISOString();
+  calls.mockResolvedValueOnce(ok({ ...finished, alreadyFinished: true }))
+    .mockResolvedValueOnce(ok({ ...linked, endedAt }))
+    .mockResolvedValueOnce(ok(savedResult));
+  await expect(persistedResult(meetingId)).resolves.toMatchObject({ meetingId, analysisRunId: requestId });
+  const finishes = calls.mock.calls.filter(([path]) => String(path).endsWith('/finish'));
+  expect(finishes).toHaveLength(2);
+  expect(finishes[0][1]).toEqual(finishes[1][1]);
+  expect(calls.mock.calls.slice(4).map(call => call[1]?.method)).toEqual(['POST', 'PUT', 'GET']);
+  expect(stored).toBeNull();
+});
+
+it('saved refresh consumes a confirmed drain receipt loaded from device storage', async () => {
+  const endedAt = new Date(finished.finishedAtMs).toISOString();
+  const calls = jest.spyOn(global, 'fetch').mockResolvedValueOnce(ok(finished))
+    .mockResolvedValueOnce(ok({ ...linked, endedAt })).mockResolvedValueOnce(ok(savedResult));
+  await expect(persistedResult(meetingId)).resolves.toMatchObject({ meetingId });
+  expect(calls.mock.calls.map(call => call[1]?.method)).toEqual(['POST', 'PUT', 'GET']);
+  expect(stored).toBeNull();
+});
+
+it.each([
+  { completion: 'unknown' },
+  { completion: 'unknown', endedAt: new Date(finished.finishedAtMs).toISOString() },
+  { version: undefined, completion: undefined },
+  { completion: 'unknown', abandon: { endedAt: new Date(finished.finishedAtMs).toISOString(), canonical: false } },
+])('saved refresh cannot manufacture finish proof from an unresolved receipt: %j', async change => {
+  stored = JSON.stringify({ ...receipt, ...change });
+  const before = stored;
+  const calls = jest.spyOn(global, 'fetch').mockResolvedValue(ok(savedResult));
+  await expect(persistedResult(meetingId)).resolves.toMatchObject({ meetingId });
+  expect(calls.mock.calls.map(call => call[1]?.method)).toEqual(['GET']);
+  expect(stored).toBe(before);
+});
+
+it('saved refresh reconciles a legacy terminal receipt by reading only', async () => {
+  const endedAt = new Date(finished.finishedAtMs).toISOString();
+  stored = JSON.stringify({ ...receipt, version: undefined, completion: undefined, endedAt });
+  const calls = jest.spyOn(global, 'fetch')
+    .mockResolvedValueOnce(ok({ ...linked, endedAt, recordingIncomplete: false }))
+    .mockResolvedValueOnce(ok(savedResult));
+  await expect(persistedResult(meetingId)).resolves.toMatchObject({ meetingId });
+  expect(calls.mock.calls.map(call => call[1]?.method)).toEqual(['GET', 'GET']);
+  expect(stored).toBeNull();
+});
+
 it.each([null, new Date(finished.finishedAtMs).toISOString()])('does not finalize a different meeting while reading a result (end=%s)', async (endedAt) => {
   stored = JSON.stringify({ ...receipt, endedAt });
   const saved = stored;
@@ -306,6 +363,9 @@ it('preserves the receipt if device deletion fails after a valid canonical finis
 });
 
 const ok = (payload: unknown) => ({ ok: true, json: async () => payload } as Response);
+const savedResult = { analysisRunId: requestId, meetingId, sessionId: requestId, generatedAt: startedAt,
+  persisted: true, storageMode: 'canonical', summary: '', summary_grounding_status: 'empty',
+  decisions: [], action_items: [], citations: [], summary_citations: [] };
 const canonicalAbandon = () => ({ ...linked, endedAt: JSON.parse(stored!).abandon.endedAt,
   recordingIncomplete: true, transcriptStatus: 'FAILED' });
 const gatewayAbandon = { ...finished, finishedAtMs: Date.now(), finalState: 'ABANDONED' };
@@ -401,4 +461,117 @@ it('a successful malformed gateway payload cannot impersonate the explicit not-f
   jest.spyOn(global, 'fetch').mockImplementationOnce(async () => ok(canonicalAbandon())).mockResolvedValueOnce(ok({ absent: true }));
   await expect(abandonRecording(jwt, receipt.externalSessionId)).rejects.toThrow('doğrulanamadı');
   expect(JSON.parse(stored!).abandon.canonical).toBe(true);
+});
+
+
+describe('independent meeting recovery journal', () => {
+  const secondMeeting = 'aaaaaaaa-1234-1234-1234-123456789012';
+  const secondSession = 'SES-new-recording';
+  function mockNewSession() {
+    return jest.spyOn(global, 'fetch').mockImplementation(async path => {
+      if (String(path).endsWith('/consents')) return ok({ meetingId: secondMeeting, captureId: requestId, consentTextHash: 'sha256:test-hash' });
+      if (String(path).endsWith('/sessions')) return ok({ sessionId: secondSession, sessionStartMs: Date.parse(startedAt), sttProvider: 'speechmatics', transcriptionMode: 'realtime' });
+      if (String(path).includes(secondMeeting) && String(path).endsWith('/recording-lifecycle')) return ok({ ...linked, meetingId: secondMeeting, externalSessionId: secondSession });
+      throw new Error('Unexpected mutation of previous recording');
+    });
+  }
+  it('preserves the old unknown receipt across new start/stop and resolves only the requested session', async () => {
+    const old = { ...receipt, completion: 'unknown' };
+    stored = JSON.stringify(old);
+    const calls = mockNewSession();
+    await expect(begin(jwt, meetingId)).rejects.toThrow('eksiksiz');
+    expect(calls).not.toHaveBeenCalled();
+    await expect(begin(jwt, secondMeeting)).resolves.toBe(secondSession);
+    expect(JSON.parse(stored!)).toMatchObject({ version: 3, records: [old, { externalSessionId: secondSession, completion: 'unknown' }] });
+    captureStopped(secondSession);
+    await expect(completeCapture(jwt, secondSession, false)).resolves.toBe(false);
+    const snapshot = stored;
+    calls.mockImplementation(async (path, options) => {
+      if (String(path).includes(`/meetings/${secondMeeting}/recording-lifecycle/abandon`)) {
+        const body = JSON.parse(options!.body as string);
+        return ok({ ...linked, ...body, meetingId: secondMeeting, recordingIncomplete: true, transcriptStatus: 'FAILED' });
+      }
+      if (String(path).includes(`/sessions/${secondSession}/abandon`)) return ok({ ...gatewayAbandon, sessionId: secondSession });
+      throw new Error('Wrong target');
+    });
+    await abandonRecording(jwt, secondSession);
+    expect(JSON.parse(snapshot!).records[0]).toEqual(old);
+    expect(JSON.parse(stored!)).toEqual(old); // Other recording remains, including outcome.
+  });
+  it('preserves an existing abandonment intent and its timestamp while allocating a different meeting', async () => {
+    const old = { ...receipt, completion: 'unknown', abandon: { endedAt: new Date().toISOString(), canonical: true } };
+    stored = JSON.stringify(old); mockNewSession();
+    await begin(jwt, secondMeeting);
+    captureStopped(secondSession);
+    expect(JSON.parse(stored!).records[0]).toEqual(old);
+  });
+  it('rejects capacity and corrupt/foreign journals before any remote allocation', async () => {
+    const calls = jest.spyOn(global, 'fetch');
+    const records = Array.from({ length: 20 }, (_, i) => ({ ...receipt, externalSessionId: `SES-old-${i}`, completion: 'unknown' }));
+    stored = JSON.stringify({ version: 3, records });
+    await expect(begin(jwt, secondMeeting)).rejects.toThrow('sınır');
+    stored = JSON.stringify({ version: 3, records: [records[0], records[0]] });
+    await expect(begin(jwt, secondMeeting)).rejects.toThrow('doğrulanamadı');
+    stored = JSON.stringify({ version: 3, records: [{ ...receipt, ownerHash: 'f'.repeat(64) }] });
+    await expect(begin(jwt, secondMeeting)).rejects.toThrow('önceki kullanıcı');
+    expect(calls).not.toHaveBeenCalled();
+  });
+  it('allows genuine capture proof to be retried after a transient local read error', async () => {
+    stored = null; mockNewSession();
+    await begin(jwt, secondMeeting);
+    captureStopped(secondSession);
+    jest.mocked(SecureStore.getItemAsync).mockRejectedValueOnce(new Error('locked'));
+    await expect(completeCapture(jwt, secondSession, false)).rejects.toThrow('okunamadı');
+    await expect(completeCapture(jwt, secondSession, false)).resolves.toBe(false);
+    expect(JSON.parse(stored!).completion).toBe('unknown');
+  });
+  it('retains confirmed drain proof if network token renewal fails, then finishes with a fresh token on retry', async () => {
+    stored = null; const calls = mockNewSession();
+    await begin(jwt, secondMeeting);
+    captureStopped(secondSession);
+    jest.mocked(mobileSession.valid).mockRejectedValueOnce(new Error('Temporary refresh failure'));
+    await expect(completeCapture(jwt, secondSession, true)).rejects.toThrow('refresh');
+    expect(JSON.parse(stored!).completion).toBe('confirmed');
+    expect(calls).toHaveBeenCalledTimes(3); // No stale-token finish request.
+    const endedAt = new Date(finished.finishedAtMs).toISOString();
+    calls.mockResolvedValueOnce(ok({ ...finished, sessionId: secondSession }))
+      .mockResolvedValueOnce(ok({ ...linked, meetingId: secondMeeting, externalSessionId: secondSession, endedAt }))
+      .mockResolvedValueOnce(ok({ ...savedResult, meetingId: secondMeeting }));
+    await expect(persistedResult(secondMeeting)).resolves.toMatchObject({ meetingId: secondMeeting });
+    expect(stored).toBeNull();
+  });
+  it.each([null, new Date(finished.finishedAtMs).toISOString()])('saved refresh cannot close an old confirmed receipt while another microphone is active (end=%s)', async endedAt => {
+    stored = JSON.stringify({ ...receipt, endedAt });
+    const calls = mockNewSession();
+    await begin(jwt, secondMeeting);
+    const before = stored;
+    calls.mockResolvedValueOnce(ok(savedResult));
+    try {
+      await expect(persistedResult(meetingId)).resolves.toMatchObject({ meetingId });
+      expect(calls.mock.calls.slice(3).map(call => call[1]?.method)).toEqual(['GET']);
+      expect(stored).toBe(before);
+    } finally { captureStopped(secondSession); }
+  });
+  it('does not silently skip a later unresolved recording when earlier confirmed metadata is cleared', async () => {
+    const endedAt = new Date(finished.finishedAtMs).toISOString();
+    const unknown = { ...receipt, externalSessionId: 'SES-unknown', completion: 'unknown' };
+    stored = JSON.stringify({ version: 3, records: [{ ...receipt, endedAt }, unknown] });
+    const calls = jest.spyOn(global, 'fetch').mockResolvedValue(ok({ ...linked, endedAt }));
+    await expect(begin(jwt, meetingId)).rejects.toThrow('eksiksiz');
+    expect(calls).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(stored!)).toEqual(unknown);
+  });
+  it('reconciles only the selected meeting while retaining unrelated confirmed and unknown receipts', async () => {
+    const endedAt = new Date(finished.finishedAtMs).toISOString();
+    const old = [receipt, { ...receipt, externalSessionId: 'SES-unknown', completion: 'unknown' }];
+    const selected = { ...receipt, meetingId: secondMeeting, externalSessionId: 'SES-selected-old', endedAt };
+    stored = JSON.stringify({ version: 3, records: [...old, selected] });
+    const calls = mockNewSession();
+    calls.mockResolvedValueOnce(ok({ ...linked, ...selected, sessionId: requestId, meetingStatus: 'COMPLETED' }));
+    await expect(begin(jwt, secondMeeting)).resolves.toBe(secondSession);
+    expect(calls).toHaveBeenCalledTimes(4); // One selected closure, then consent/session/link.
+    expect(calls.mock.calls[0][0]).toContain(`/meetings/${secondMeeting}/recording-lifecycle`);
+    expect(JSON.parse(stored!).records.slice(0, 2)).toEqual(old);
+    captureStopped(secondSession);
+  });
 });

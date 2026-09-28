@@ -1,10 +1,15 @@
 import { act, fireEvent, render, waitFor } from '@testing-library/react-native';
 import { Alert, AppState, Platform, Share } from 'react-native';
+import * as Crypto from 'expo-crypto';
 import LiveTestScreen from '../../../app/live-test';
 import * as api from '../liveTestApi';
 import { clearMeetingViews, saveMeetingView } from '../meetingViewCache';
 import type { LiveText } from '../foregroundStream';
 import type { AnalysisSnapshot } from '../../analysis/liveAnalysis';
+import { DiagnosticHistory, type Entry } from '../../diagnostics/history';
+import { openAccountHistory } from '../../diagnostics/openAccountHistory';
+import { DiagnosticOpenError } from '../../diagnostics/openFailure';
+jest.mock('../../diagnostics/openAccountHistory', () => ({ openAccountHistory: jest.fn() }));
 
 const mockStart = jest.fn().mockResolvedValue(undefined);
 const mockStop = jest.fn();
@@ -21,6 +26,7 @@ const mockDrain = jest.fn();
 let mockFailure: (message: string) => void;
 let mockReady: () => void;
 let mockText: (line: LiveText) => void;
+let mockConnectionInterrupted: (connectionId: number) => void;
 let mockAnalysis: (snapshot: AnalysisSnapshot) => void;
 let mockAnalysisDiagnostic: ((message: string) => void) | undefined;
 let mockParams: { notificationMeetingId?: string } = {};
@@ -39,7 +45,7 @@ jest.mock('expo-web-browser', () => ({ maybeCompleteAuthSession: jest.fn() }));
 jest.mock('../../auth/mobileSession', () => ({ mobileSession: { contentScope: () => 1, snapshot: () => null } }));
 jest.mock('../liveTestApi', () => ({
   login: jest.fn(), meetings: jest.fn(), begin: jest.fn(), finish: jest.fn(), completeCapture: jest.fn(), captureStopped: jest.fn(), pendingRecording: jest.fn(async () => null), abandonRecording: jest.fn(), createMeeting: jest.fn(),
-  restoreSession: jest.fn(), validSession: jest.fn(), logout: jest.fn(), persistedResult: jest.fn(), savedTranscript: jest.fn(),
+  lifecycleOwner: jest.fn(), restoreSession: jest.fn(), validSession: jest.fn(), logout: jest.fn(), persistedResult: jest.fn(), savedTranscript: jest.fn(),
   BASE_URL: 'https://example.test', CONSENT: 'Test onayı',
 }));
 jest.mock('../../analysis/analysisSubscription', () => ({ subscribeAnalysis: (options: { onSnapshot: typeof mockAnalysis; onDiagnostic?: (message: string) => void }) => {
@@ -48,16 +54,21 @@ jest.mock('../../analysis/analysisSubscription', () => ({ subscribeAnalysis: (op
   return () => options.onDiagnostic?.('Canlı analiz akışı: bağlantı=1, bayt=413, heartbeat=1, geçerli=1');
 } }));
 jest.mock('../foregroundStream', () => ({ ForegroundStream: jest.fn().mockImplementation(
-  (_socket, _ready, _text, failure) => {
+  (_socket, _ready, _text, failure, _buffer, recovery) => {
     mockFailure = failure;
     mockReady = _ready;
     mockText = _text;
+    mockConnectionInterrupted = recovery.onConnectionInterrupted;
     return { send: jest.fn(), stop: mockDrain, dispose: jest.fn(), completionConfirmed: () => true, diagnostics: () => ({}) };
   }),
 }));
 
 beforeEach(() => {
   jest.clearAllMocks();
+  jest.mocked(api.pendingRecording).mockResolvedValue(null);
+  jest.mocked(api.lifecycleOwner).mockRejectedValue(new Error('Fixture has no stable account'));
+  jest.mocked(openAccountHistory).mockReset();
+  jest.mocked(openAccountHistory).mockResolvedValue(null);
   clearMeetingViews();
   mockParams = {};
   mockWebStream = false;
@@ -107,6 +118,23 @@ it('preserves validated speaker attribution through the actual live screen callb
   } }); });
   expect(screen.getByText(/speakerNotice|kişi adı veya kimlik/)).toBeTruthy();
   expect(screen.getByText(/Merhaba/)).toBeTruthy();
+  screen.unmount();
+});
+
+it('preserves earlier text after socket sequence reset through the real screen callbacks', async () => {
+  mockPermission.mockResolvedValue({ granted: true });
+  const screen = await openAndStart();
+  await act(async () => {
+    mockText({ connectionId: 1, seq: 0, text: 'Önceki cümle.', final: true });
+    mockText({ connectionId: 1, seq: 1, text: 'Kesinleşmemiş cümle', final: false });
+    mockConnectionInterrupted(1);
+    mockText({ connectionId: 3, seq: 0, text: 'Yeni cümle.', final: true });
+  });
+  expect(screen.getByText('Önceki cümle.')).toBeTruthy();
+  expect(screen.getByText('Yeni cümle.')).toBeTruthy();
+  expect(screen.getByText('Kesinleşmemiş cümle')).toBeTruthy();
+  expect(screen.getByText(/interruptedTag|bu metin kesinleşmedi/)).toBeTruthy();
+  expect(screen.queryByText(/revisedTag|· düzeltildi/)).toBeNull();
   screen.unmount();
 });
 
@@ -273,6 +301,32 @@ it('creates and selects a new meeting without starting the microphone', async ()
   expect(mockStart).not.toHaveBeenCalled(); expect(api.begin).not.toHaveBeenCalled();
 });
 
+it('starts an ordinarily created meeting with normal consent while the old meeting receipt remains visible', async () => {
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  jest.mocked(api.restoreSession).mockResolvedValueOnce({ jwt: 'restored', expiresAt: Date.now() + 300000 });
+  jest.mocked(api.pendingRecording).mockResolvedValue({ meetingId: 'meeting-1', sessionId: 'SES-old', incomplete: true, abandoning: false });
+  jest.mocked(api.createMeeting).mockResolvedValueOnce({ id: 'new-meeting', title: 'Yeni görüşme' });
+  mockPermission.mockResolvedValue({ granted: true });
+  const screen = render(<LiveTestScreen />);
+  await waitFor(() => expect(screen.getByText('Test toplantısı')).toBeTruthy());
+  fireEvent.press(screen.getByText('Yeni toplantı oluştur'));
+  fireEvent.changeText(screen.getByLabelText('Yeni toplantı adı'), 'Yeni görüşme');
+  fireEvent.press(screen.getByText('Toplantıyı oluştur'));
+  await waitFor(() => expect(screen.getByText('✓ Yeni görüşme')).toBeTruthy());
+  await waitFor(() => expect(screen.getByText(/Seçili toplantıda Konuşma testini başlat/)).toBeTruthy());
+  expect(screen.queryByText('Önceki kaydı koru, yeni toplantı aç')).toBeNull();
+  expect(api.begin).not.toHaveBeenCalled();
+  fireEvent.press(screen.getByText('Konuşma testini başlat'));
+  await act(async () => alert.mock.calls.at(-1)?.[2]?.[1].onPress?.());
+  expect(api.begin).toHaveBeenCalledWith('test-only', 'new-meeting', expect.any(Function));
+  expect(api.createMeeting).toHaveBeenCalledTimes(1);
+  expect(api.abandonRecording).not.toHaveBeenCalled();
+  await act(async () => mockReady());
+  expect(screen.getByText('● Mikrofon açık · Kayıt sürüyor')).toBeTruthy();
+  await act(async () => mockFailure('Kontrollü test kapanışı'));
+  await act(async () => screen.unmount());
+});
+
 it('opens an authorized notification meeting only after session restoration without starting audio', async () => {
   mockParams = { notificationMeetingId: 'meeting-1' };
   jest.mocked(api.restoreSession).mockResolvedValueOnce({ jwt: 'restored', expiresAt: Date.now() + 300000 });
@@ -316,8 +370,9 @@ it('defers a different notification meeting while recording and applies it after
 it('restores canonical full text in Metin even when a partial navigation cache exists', async () => {
   saveMeetingView('meeting-1', { lines: [{ seq: 1, text: 'PARTIAL_CACHE', confirmed: 'PARTIAL_CACHE', tentative: '', status: 'final' }], analysis: null, diagnostics: [] });
   jest.mocked(api.restoreSession).mockResolvedValue({ jwt: 'test-only', expiresAt: Date.now() + 600000 });
-  jest.mocked(api.persistedResult).mockResolvedValue({ analysisRunId: 'run-1', meetingId: 'meeting-1', sessionId: 'session-1', generatedAt: '2026-09-18T10:00:00Z', summary: '', decisions: [], actions: [], sources: [] });
-  jest.mocked(api.savedTranscript).mockResolvedValue({ meetingId: 'meeting-1', analysisRunId: 'run-1', text: 'FULL_SAVED_TRANSCRIPT' });
+  jest.mocked(api.persistedResult).mockResolvedValue({ analysisRunId: 'run-1', meetingId: 'meeting-1', sessionId: 'session-1', generatedAt: '2026-09-18T10:00:00Z', summary: '', decisions: [], actions: [], sources: [], recordingOutcome: 'UNKNOWN', recordingIncompleteReason: null });
+  jest.mocked(api.savedTranscript).mockResolvedValue({ meetingId: 'meeting-1', analysisRunId: 'run-1', text: 'FULL_SAVED_TRANSCRIPT',
+    recordingOutcome: 'UNKNOWN', recordingIncompleteReason: null });
   const screen = render(<LiveTestScreen />);
   await waitFor(() => expect(screen.getByText('Test toplantısı')).toBeTruthy());
   fireEvent.press(screen.getByText('Test toplantısı'));
@@ -435,6 +490,7 @@ it('shows the reopened meeting server result in each analysis tab, replacing an 
   jest.mocked(api.persistedResult).mockImplementation(async id => {
     if (id !== 'meeting-1') throw new Error('Sonuç bulunamadı');
     return { meetingId: id, analysisRunId: 'run-1', sessionId: 'session-1', generatedAt: '2026-09-21', summary: 'Kayıtlı özet',
+      recordingOutcome: 'UNKNOWN', recordingIncompleteReason: null,
       decisions: ['Kayıtlı karar'], actions: [{ text: 'Dosyayı hazırla', owner: 'Zeynep', dueDate: '2026-09-22' }], sources: [] };
   });
   const screen = render(<LiveTestScreen />);
@@ -498,4 +554,189 @@ it('keeps the synchronous closing analysis counters but rejects late diagnostics
   expect(screen.getByText(/Canlı analiz akışı: bağlantı=1, bayt=413/)).toBeTruthy();
   await act(async () => previousDiagnostic?.('LATE_OLD_CONNECTION'));
   expect(screen.queryByText(/LATE_OLD_CONNECTION/)).toBeNull();
+});
+
+
+it('exports persistent meeting diagnostics after remount without saving spoken text', async () => {
+  const id = '604593c5-9c2d-4c86-bc1d-2aec2270cf99';
+  const entries: Entry[] = [];
+  jest.mocked(api.lifecycleOwner).mockResolvedValue('a'.repeat(64));
+  jest.mocked(api.meetings).mockResolvedValue([{ id, title: 'Test toplantısı' }]);
+  jest.mocked(openAccountHistory).mockImplementation(async () => new DiagnosticHistory({
+    append: entry => { entries.push(entry); }, read: meeting => ({ entries: entries.filter(e => e.meeting === meeting), removed: 0 }),
+    clear: jest.fn(), close: jest.fn(),
+  }));
+  mockPermission.mockResolvedValue({ granted: true });
+  jest.mocked(api.begin).mockImplementationOnce(async (_jwt, _meeting, onStage) => {
+    for (const stage of ['Önceki kaydın kapanış bağlantısı doğrulanıyor', 'Kayıt onayının sunucuya kaydı',
+      'Canlı ses oturumu oluşturma', 'Toplantı kayıt bağlantısı doğrulanıyor', 'Ses sağlayıcısı doğrulandı: Speechmatics (canlı)']) onStage?.(stage);
+    return 'SES-diagnostic-test';
+  });
+  const first = await openAndStart();
+  await act(async () => { mockReady(); });
+  await act(async () => { mockText({ seq: 3, text: 'PRIVATE_NAME. PRIVATE_TASK', final: true }); });
+  await act(async () => { mockAnalysis({ version: 7, partial: true, summary: 'PRIVATE_SUMMARY', decisions: [], actions: [{ text: 'PRIVATE_ACTION', owner: null, dueDate: null }] }); });
+  await act(async () => { mockFailure('Controlled transport failure'); });
+  await act(async () => { first.unmount(); });
+  expect(entries.some(e => e.kind === 'run_started')).toBe(true);
+  expect(entries.some(e => e.kind === 'analysis' && e.data.missingOwners === 1)).toBe(true);
+  expect(entries.filter(e => e.kind === 'stage').map(e => e.data.stage)).toEqual(expect.arrayContaining([6, 7, 8, 9, 10]));
+  expect(entries.filter(e => e.kind === 'stage').some(e => e.data.stage === -1)).toBe(false);
+  jest.mocked(api.restoreSession).mockResolvedValue({ jwt: 'test-only', expiresAt: Date.now() + 600000 });
+  const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: Share.sharedAction });
+  const second = render(<LiveTestScreen />);
+  await waitFor(() => expect(second.getByText('Test toplantısı')).toBeTruthy());
+  fireEvent.press(second.getByText('Test toplantısı'));
+  fireEvent.press(second.getByText('Tanılama'));
+  await act(async () => { fireEvent.press(second.getByText('Tanılama kaydını paylaş')); });
+  const report = String(share.mock.calls.at(-1)?.[0].message);
+  expect(report).toContain('Kayıt denemesi başladı');
+  expect(report).toContain('Kesin metin olayı');
+  expect(report).toContain('"missingOwners":1');
+  expect(report).not.toContain('PRIVATE');
+  await act(async () => { second.unmount(); });
+});
+
+it('closes a diagnostic store that finishes opening after the screen was left', async () => {
+  let finish!: (history: DiagnosticHistory) => void;
+  jest.mocked(api.lifecycleOwner).mockResolvedValue('a'.repeat(64));
+  jest.mocked(openAccountHistory).mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const first = render(<LiveTestScreen />);
+  await act(async () => {});
+  fireEvent.press(first.getByText('Giriş yap'));
+  await waitFor(() => expect(openAccountHistory).toHaveBeenCalled());
+  first.unmount();
+  const close = jest.fn();
+  await act(async () => { finish(new DiagnosticHistory({ append: jest.fn(), read: () => ({ entries: [], removed: 0 }), clear: jest.fn(), close })); });
+  expect(close).toHaveBeenCalledTimes(1);
+});
+
+it.each([true, false])('explains unavailable history and exports only a safe opening code (known=%s)', async known => {
+  jest.mocked(openAccountHistory).mockRejectedValue(known ? new DiagnosticOpenError('HISTORY_DIRECTORY') : new Error('PRIVATE_PATH_KEY_TOKEN'));
+  const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: Share.sharedAction });
+  const screen = render(<LiveTestScreen />);
+  await act(async () => {});
+  await act(async () => fireEvent.press(screen.getByText('Giriş yap')));
+  fireEvent.press(screen.getByText('Test toplantısı'));
+  fireEvent.press(screen.getByText('Tanılama'));
+  const code = known ? 'HISTORY_DIRECTORY' : 'HISTORY_UNKNOWN';
+  expect(screen.getByText(new RegExp(`İnceleme kodu: ${code}`))).toBeTruthy();
+  expect(screen.getByText(/Kalıcı tanılama hazır değil/)).toBeTruthy();
+  expect(screen.queryByText('Ayrıntılı test raporunu paylaş')).toBeNull();
+  await act(async () => fireEvent.press(screen.getByText('Tanılama kaydını paylaş')));
+  expect(share.mock.calls[0][0].message).toContain(code);
+  expect(share.mock.calls[0][0].message).not.toContain('PRIVATE');
+  screen.unmount();
+});
+
+it('isolates diagnostic exports across logout/login and ignores the old account callbacks', async () => {
+  const id = '604593c5-9c2d-4c86-bc1d-2aec2270cf99';
+  const accounts: Record<string, Entry[]> = { 'test-only': [], 'account-b': [] };
+  jest.mocked(api.meetings).mockResolvedValue([{ id, title: 'Test toplantısı' }]);
+  jest.mocked(openAccountHistory).mockImplementation(async jwt => new DiagnosticHistory({
+    append: entry => { accounts[jwt].push(entry); }, read: meeting => ({ entries: accounts[jwt].filter(e => e.meeting === meeting), removed: 0 }),
+    clear: jest.fn(), close: jest.fn(),
+  }));
+  mockPermission.mockResolvedValue({ granted: true });
+  const screen = await openAndStart();
+  await act(async () => mockReady());
+  await act(async () => mockText({ seq: 1, text: 'PRIVATE', final: true }));
+  const oldText = mockText; const oldFailure = mockFailure;
+  await act(async () => mockFailure('Controlled stop'));
+  fireEvent.press(screen.getByText('Toplantı seç / ayarlar'));
+  await act(async () => fireEvent.press(screen.getByText('Çıkış yap')));
+  const countA = accounts['test-only'].length;
+  jest.mocked(api.login).mockResolvedValue({ jwt: 'account-b', expiresAt: Date.now() + 600000 });
+  await act(async () => fireEvent.press(screen.getByText('Giriş yap')));
+  await waitFor(() => expect(screen.getByText('Test toplantısı')).toBeTruthy());
+  fireEvent.press(screen.getByText('Test toplantısı'));
+  await act(async () => { oldText({ seq: 999, text: 'OLD_PRIVATE', final: true }); oldFailure('OLD_FAILURE'); });
+  const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: Share.sharedAction });
+  fireEvent.press(screen.getByText('Tanılama'));
+  await act(async () => fireEvent.press(screen.getByText('Tanılama kaydını paylaş')));
+  expect(accounts['test-only']).toHaveLength(countA);
+  expect(accounts['account-b'].some(e => e.kind === 'transcript')).toBe(false);
+  expect(String(share.mock.calls.at(-1)?.[0].message)).not.toMatch(/Kesin metin olayı|Kayıt denemesi başladı|PRIVATE/);
+  expect(screen.queryByText('OLD_FAILURE')).toBeNull();
+  await act(async () => screen.unmount());
+});
+
+it.each(['android', 'ios'] as const)('starts audio despite optional diagnostic failures on %s', async platform => {
+  jest.replaceProperty(Platform, 'OS', platform);
+  const id = '604593c5-9c2d-4c86-bc1d-2aec2270cf99';
+  jest.spyOn(Crypto, 'randomUUID').mockReturnValue(id);
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  const journal = new DiagnosticHistory({ append: jest.fn(), read: () => ({ entries: [], removed: 0 }),
+    clear: jest.fn(), close: jest.fn(), appendDetail: jest.fn() });
+  // Exercise the screen boundary too: selection, capture, callbacks and cleanup must all survive.
+  jest.spyOn(journal, 'record').mockImplementation(() => { throw new Error('PRIVATE_JOURNAL_FAILURE'); });
+  const begin = jest.spyOn(journal, 'beginDetailed').mockImplementation(() => { throw new Error('PRIVATE_SETUP_FAILURE'); });
+  jest.mocked(openAccountHistory).mockResolvedValue(journal);
+  jest.mocked(api.meetings).mockResolvedValue([{ id, title: 'Test toplantısı' }]);
+  mockPermission.mockResolvedValue({ granted: true });
+  const screen = render(<LiveTestScreen />);
+  await act(async () => {});
+  await act(async () => fireEvent.press(screen.getByText('Giriş yap')));
+  fireEvent.press(screen.getByText('Test toplantısı'));
+  fireEvent.press(screen.getByText('Konuşma testini başlat'));
+  await act(async () => alert.mock.calls.at(-1)?.[2]?.[1].onPress?.());
+  await waitFor(() => expect(api.begin).toHaveBeenCalledTimes(1));
+  expect(screen.queryByLabelText('Sonraki testte ayrıntılı tanılama')).toBeNull();
+  await act(async () => mockReady());
+  expect(screen.getByText('● Mikrofon açık · Kayıt sürüyor')).toBeTruthy();
+  await act(async () => mockFailure('Kontrollü test kapanışı'));
+  const share = jest.spyOn(Share, 'share').mockResolvedValue({ action: Share.sharedAction });
+  fireEvent.press(screen.getByText('Tanılama'));
+  fireEvent.press(screen.getByText('Tanılama kaydını paylaş'));
+  expect(screen.queryByText('Ayrıntılı test raporunu paylaş')).toBeNull();
+  expect(share.mock.calls[0][0].message).not.toContain('PRIVATE');
+  fireEvent.press(screen.getByText('Konuşma testini başlat'));
+  await act(async () => alert.mock.calls.at(-1)?.[2]?.[1].onPress?.());
+  await waitFor(() => expect(api.begin).toHaveBeenCalledTimes(2));
+  expect(begin).not.toHaveBeenCalled(); // Detailed capture was withdrawn; no new content writes.
+  await act(async () => mockFailure('Kontrollü test kapanışı'));
+  await act(async () => screen.unmount());
+});
+
+it('releases the startup lock after a preparation failure and allows a second confirmed attempt', async () => {
+  jest.spyOn(Crypto, 'randomUUID').mockImplementationOnce(() => { throw new Error('PRIVATE_NATIVE_FAILURE'); });
+  mockPermission.mockResolvedValue({ granted: true });
+  const screen = await openAndStart();
+  await waitFor(() => expect(screen.getByText(/İnceleme kodu: START_ID/)).toBeTruthy());
+  expect(api.begin).not.toHaveBeenCalled();
+  expect(mockPermission).not.toHaveBeenCalled();
+  fireEvent.press(screen.getByText('Konuşma testini başlat'));
+  await act(async () => jest.mocked(Alert.alert).mock.calls.at(-1)?.[2]?.[1].onPress?.());
+  await waitFor(() => expect(api.begin).toHaveBeenCalledTimes(1));
+  await act(async () => mockReady());
+  expect(screen.getByText('● Mikrofon açık · Kayıt sürüyor')).toBeTruthy();
+  await act(async () => mockFailure('Kontrollü test kapanışı'));
+  await act(async () => screen.unmount());
+});
+
+it('opens a separate meeting only after confirmation and starts it through the ordinary microphone consent', async () => {
+  mockStream.isStreaming = false;
+  const alert = jest.spyOn(Alert, 'alert').mockImplementation(() => {});
+  jest.mocked(api.pendingRecording).mockResolvedValue({ meetingId: 'meeting-1', sessionId: 'SES-old', incomplete: true, abandoning: false });
+  jest.mocked(api.createMeeting).mockResolvedValue({ id: 'meeting-2', title: 'Yeni toplantı' });
+  mockPermission.mockResolvedValue({ granted: true });
+  const screen = render(<LiveTestScreen />);
+  await act(async () => {});
+  await act(async () => fireEvent.press(screen.getByText('Giriş yap')));
+  fireEvent.press(screen.getByText('Test toplantısı'));
+  await waitFor(() => expect(screen.getByText('Önceki kaydı koru, yeni toplantı aç')).toBeTruthy());
+  fireEvent.press(screen.getByText('Önceki kaydı koru, yeni toplantı aç'));
+  expect(api.createMeeting).not.toHaveBeenCalled();
+  await act(async () => alert.mock.calls.at(-1)?.[2]?.[1].onPress?.());
+  expect(api.begin).not.toHaveBeenCalled();
+  expect(api.abandonRecording).not.toHaveBeenCalled();
+  expect(screen.getByText(/Yeni toplantı hazır/)).toBeTruthy();
+  fireEvent.press(screen.getByText('Konuşma testini başlat'));
+  await act(async () => alert.mock.calls.at(-1)?.[2]?.[1].onPress?.());
+  expect(api.begin).toHaveBeenCalledWith('test-only', 'meeting-2', expect.any(Function));
+  mockStream.isStreaming = true;
+  await act(async () => mockReady());
+  expect(screen.getByText('● Mikrofon açık · Kayıt sürüyor')).toBeTruthy();
+  await act(async () => mockFailure('Kontrollü test kapanışı'));
+  await act(async () => screen.unmount());
 });

@@ -49,32 +49,63 @@ export async function lifecycleOwner(jwt: string): Promise<string> {
 function validInstant(value: unknown): value is string {
   return typeof value === 'string' && Number.isFinite(Date.parse(value));
 }
-async function readLifecycle(jwt: string): Promise<PendingLifecycle | null> {
+const MAX_PENDING = 20;
+const MAX_JOURNAL_BYTES = 32768;
+function decodeLifecycle(parsed: PendingLifecycle): PendingLifecycle {
+  if (!parsed || typeof parsed.ownerHash !== 'string' || !/^[a-f0-9]{64}$/.test(parsed.ownerHash) || !UUID.test(parsed.meetingId)
+    || !/^SES-[A-Za-z0-9._:-]{1,124}$/.test(parsed.externalSessionId) || !validInstant(parsed.startedAt)
+    || !(parsed.endedAt === null || (validInstant(parsed.endedAt) && Date.parse(parsed.endedAt) >= Date.parse(parsed.startedAt)))
+    || !(parsed.version === undefined || (parsed.version === 2 && ['unknown', 'confirmed'].includes(parsed.completion!)))
+    || !(parsed.abandon === undefined || (parsed.version === 2 && validInstant(parsed.abandon?.endedAt)
+      && Date.parse(parsed.abandon.endedAt) >= Date.parse(parsed.startedAt) && typeof parsed.abandon.canonical === 'boolean'))) {
+    throw new Error('Bekleyen kayıt bağlantısı doğrulanamadı. Yeni kayıt başlatılmadı.');
+  }
+  // Retain only bounded metadata, including legacy timestamps and unfinished abandonment intent.
+  return { ownerHash: parsed.ownerHash, meetingId: parsed.meetingId, externalSessionId: parsed.externalSessionId,
+    startedAt: parsed.startedAt, endedAt: parsed.endedAt,
+    ...(parsed.version === 2 ? { version: 2, completion: parsed.completion } : {}),
+    ...(parsed.abandon ? { abandon: { endedAt: parsed.abandon.endedAt, canonical: parsed.abandon.canonical } } : {}) };
+}
+async function readLifecycles(ownerHash: string): Promise<PendingLifecycle[]> {
   let raw: string | null;
   try { raw = await SecureStore.getItemAsync(LIFECYCLE_KEY); }
   catch { throw new Error('Bekleyen kayıt bağlantısı cihazdan okunamadı.'); }
-  if (!raw) return null;
-  let value: PendingLifecycle | undefined;
+  if (!raw) return [];
+  let records: PendingLifecycle[];
   try {
-    const parsed = raw.length <= 2048 ? JSON.parse(raw) : null;
-    if (parsed && typeof parsed.ownerHash === 'string' && /^[a-f0-9]{64}$/.test(parsed.ownerHash) && UUID.test(parsed.meetingId)
-      && /^SES-[A-Za-z0-9._:-]{1,124}$/.test(parsed.externalSessionId) && validInstant(parsed.startedAt)
-      && (parsed.endedAt === null || (validInstant(parsed.endedAt)
-        && Date.parse(parsed.endedAt) >= Date.parse(parsed.startedAt)))
-      && (parsed.version === undefined || (parsed.version === 2 && ['unknown', 'confirmed'].includes(parsed.completion)))
-      && (parsed.abandon === undefined || (parsed.version === 2 && validInstant(parsed.abandon?.endedAt)
-        && Date.parse(parsed.abandon.endedAt) >= Date.parse(parsed.startedAt) && typeof parsed.abandon.canonical === 'boolean'))) value = parsed;
-  } catch { /* A corrupt receipt must not silently allow a new recording. */ }
-  if (!value) throw new Error('Bekleyen kayıt bağlantısı doğrulanamadı. Yeni kayıt başlatılmadı.');
-  if (value.ownerHash !== await lifecycleOwner(jwt)) throw new Error('Bekleyen kayıt için önceki kullanıcıyla giriş gerekli.');
-  return value;
+    if (raw.length > MAX_JOURNAL_BYTES) throw new Error();
+    const parsed = JSON.parse(raw);
+    const values = parsed?.version === 3 ? parsed.records : [parsed];
+    if (!Array.isArray(values) || !values.length || values.length > MAX_PENDING) throw new Error();
+    records = values.map(decodeLifecycle);
+    if (new Set(records.map(row => row.externalSessionId)).size !== records.length) throw new Error();
+  } catch { throw new Error('Bekleyen kayıt bağlantısı doğrulanamadı. Yeni kayıt başlatılmadı.'); }
+  if (records.some(row => row.ownerHash !== ownerHash)) throw new Error('Bekleyen kayıt için önceki kullanıcıyla giriş gerekli.');
+  return records;
+}
+async function readLifecycle(jwt: string, sessionId?: string, meetingId?: string): Promise<PendingLifecycle | null> {
+  const records = await readLifecycles(await lifecycleOwner(jwt));
+  return records.find(row => (!sessionId || row.externalSessionId === sessionId) && (!meetingId || row.meetingId === meetingId)) ?? null;
+}
+async function saveLifecycles(records: PendingLifecycle[]): Promise<void> {
+  // The same SecureStore key makes migration atomic: no copy/delete handoff window.
+  const raw = records.length === 1 ? JSON.stringify(records[0]) : JSON.stringify({ version: 3, records });
+  if (records.length > MAX_PENDING || raw.length > MAX_JOURNAL_BYTES) throw new Error('Bekleyen kayıt sınırına ulaşıldı. Önce eski kayıtların kapanışını tamamlayın.');
+  try {
+    if (!records.length) {
+      await SecureStore.deleteItemAsync(LIFECYCLE_KEY);
+      if (await SecureStore.getItemAsync(LIFECYCLE_KEY) !== null) throw new Error();
+    } else {
+      await SecureStore.setItemAsync(LIFECYCLE_KEY, raw, { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
+      if (await SecureStore.getItemAsync(LIFECYCLE_KEY) !== raw) throw new Error();
+    }
+  } catch { throw new Error(records.length ? 'Kayıt bağlantısı cihazda doğrulanamadı.' : 'Kayıt bağlantısı temizliği doğrulanamadı.'); }
 }
 async function writeLifecycle(value: PendingLifecycle): Promise<void> {
-  const raw = JSON.stringify(value);
-  try {
-    await SecureStore.setItemAsync(LIFECYCLE_KEY, raw, { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
-    if (await SecureStore.getItemAsync(LIFECYCLE_KEY) !== raw) throw new Error();
-  } catch { throw new Error('Kayıt bağlantısı cihazda doğrulanamadı.'); }
+  const records = await readLifecycles(value.ownerHash);
+  const index = records.findIndex(row => row.externalSessionId === value.externalSessionId);
+  if (index < 0) records.push(value); else records[index] = value;
+  await saveLifecycles(records);
 }
 async function syncLifecycle(jwt: string, pending: PendingLifecycle): Promise<void> {
   const result = await request(`/api/v1/admin/meetings/${pending.meetingId}/recording-lifecycle`, jwt,
@@ -90,11 +121,9 @@ async function syncLifecycle(jwt: string, pending: PendingLifecycle): Promise<vo
     throw new Error('Toplantı kayıt bağlantısı doğrulanamadı.');
   }
 }
-async function clearLifecycle(): Promise<void> {
-  try {
-    await SecureStore.deleteItemAsync(LIFECYCLE_KEY);
-    if (await SecureStore.getItemAsync(LIFECYCLE_KEY) !== null) throw new Error();
-  } catch { throw new Error('Kayıt bağlantısı temizliği doğrulanamadı.'); }
+async function clearLifecycle(pending: PendingLifecycle): Promise<void> {
+  const records = await readLifecycles(pending.ownerHash);
+  await saveLifecycles(records.filter(row => row.externalSessionId !== pending.externalSessionId));
 }
 function matchesLifecycle(result: Record<string, unknown> | null, pending: PendingLifecycle, endedAt: string): boolean {
   return !!result && !Array.isArray(result) && result.meetingId === pending.meetingId && UUID.test(String(result.sessionId))
@@ -111,7 +140,7 @@ async function finishPending(jwt: string, pending: PendingLifecycle): Promise<vo
         throw new Error('Önceki kaydın sunucu durumu eşleşmedi; kayıt korunuyor.');
       }
       // Read-only reconciliation, NOT proof of lossless audio or permission for a new finish event.
-      await clearLifecycle(); return;
+      await clearLifecycle(pending); return;
     }
     throw new Error('Sesin eksiksiz kapanışı doğrulanmadı. Bekleyen kayıt bölümünü açın.');
   }
@@ -125,7 +154,7 @@ async function finishPending(jwt: string, pending: PendingLifecycle): Promise<vo
     await writeLifecycle(pending);
   }
   await syncLifecycle(jwt, pending);
-  await clearLifecycle();
+  await clearLifecycle(pending);
 }
 export const CONSENT = 'Bu kısa test sırasında mikrofon sesim, konuşmamı yazıya dönüştürmek için Workcube sunucusuna şifreli bağlantıyla iletilecek. Cihazda ses dosyası saklanmayacak. Ses işlemeyi kabul ediyorum.';
 
@@ -226,9 +255,15 @@ export async function persistedResult(meetingId: string) {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(meetingId)) throw new Error('Geçersiz toplantı.');
   const session = await validSession(30000);
   await orderedLifecycle(async () => {
-    const pending = await readLifecycle(session.jwt);
-    // Only a confirmed finish is replayed while reading; never stop an active capture.
-    if (pending?.meetingId === meetingId && pending.endedAt !== null && !pending.abandon) await finishPending(session.jwt, pending);
+    const pending = await readLifecycle(session.jwt, undefined, meetingId);
+    // Drain proof is saved BEFORE token renewal / the gateway finish response.
+    // A lost response therefore leaves endedAt=null and still needs idempotent replay.
+    // Legacy terminal receipts only use finishPending's read-only reconciliation.
+    if (!activeLifecycleSession && pending && !pending.abandon
+      && ((pending.version === 2 && pending.completion === 'confirmed')
+        || (pending.version === undefined && pending.endedAt !== null))) {
+      await finishPending(session.jwt, pending);
+    }
   });
   return parsePersistedResult(await request(`/api/v1/admin/meetings/${meetingId}/intelligence/result`, session.jwt), meetingId);
 }
@@ -267,10 +302,19 @@ export function begin(jwt: string, meetingId: string, onStage?: (stage: string) 
     if (!UUID.test(meetingId)) throw new Error('Geçersiz toplantı.');
     if (activeLifecycleSession) throw new Error('Etkin kayıt durdurulmadan yeni kayıt başlatılamaz.');
     const ownerHash = await lifecycleOwner(jwt);
-    const previous = await readLifecycle(jwt);
-    if (previous) {
+    const records = await readLifecycles(ownerHash);
+    // Closure belongs to its meeting, regardless of how the selected meeting was opened.
+    // Unrelated receipts remain recoverable; they are never finished or discarded here.
+    const toResolve = records.filter(row => row.meetingId === meetingId);
+    for (const previous of toResolve) {
       onStage?.('Önceki kaydın kapanış bağlantısı doğrulanıyor');
       await finishPending(jwt, previous);
+    }
+    const remaining = await readLifecycles(ownerHash);
+    // Reserve the metadata slot before allocating anything remotely. Every serialized receipt
+    // is at most 1 KiB; this conservative size check also bounds later terminal updates.
+    if (remaining.length >= MAX_PENDING || JSON.stringify(remaining).length + 1024 > MAX_JOURNAL_BYTES) {
+      throw new Error('Bekleyen kayıt sınırına ulaşıldı. Önce eski kayıtların kapanışını tamamlayın.');
     }
     return beginLinked(jwt, meetingId, ownerHash, onStage);
   });
@@ -328,28 +372,32 @@ export function completeCapture(jwt: string, sessionId: string, uninterruptedDra
   return orderedLifecycle(async () => {
     captureStopped(sessionId);
     if (stoppedLifecycleSession !== sessionId) throw new Error('Etkin kayıt eşleşmedi; kapanış onayı saklanmadı.');
-    stoppedLifecycleSession = null;
-    const pending = await readLifecycle(jwt);
+    const pending = await readLifecycle(jwt, sessionId);
     if (!pending || pending.externalSessionId !== sessionId || pending.abandon) {
       throw new Error('Etkin kayıt eşleşmedi; kapanış onayı saklanmadı.');
     }
     const stopped: PendingLifecycle = { ...pending, version: 2, completion: uninterruptedDrain ? 'confirmed' : 'unknown' };
     await writeLifecycle(stopped);
+    stoppedLifecycleSession = null; // Consume proof only after durable acknowledgement.
     if (!uninterruptedDrain) return false;
-    await finishPending(jwt, stopped);
+    // Network refresh follows persistence. A refresh failure cannot erase real drain proof,
+    // and a long recording must not send its stale access token to the finish endpoint.
+    const current = await validSession(15000);
+    if (await lifecycleOwner(current.jwt) !== stopped.ownerHash) throw new Error('Kayıt kullanıcısı değişti; kapanış bilgisi korunuyor.');
+    await finishPending(current.jwt, stopped);
     return true;
   });
 }
 
-export async function pendingRecording(jwt: string) {
-  const pending = await orderedLifecycle(() => readLifecycle(jwt));
+export async function pendingRecording(jwt: string, meetingId?: string) {
+  const pending = await orderedLifecycle(async () => (meetingId ? await readLifecycle(jwt, undefined, meetingId) : null) ?? await readLifecycle(jwt));
   return pending ? { meetingId: pending.meetingId, sessionId: pending.externalSessionId,
     incomplete: pending.completion !== 'confirmed', abandoning: !!pending.abandon } : null;
 }
 
 export function abandonRecording(jwt: string, sessionId: string): Promise<void> {
   return orderedLifecycle(async () => {
-    let pending = await readLifecycle(jwt);
+    let pending = await readLifecycle(jwt, sessionId);
     if (!pending || pending.externalSessionId !== sessionId || activeLifecycleSession) throw new Error('Bekleyen kayıt eşleşmedi veya mikrofon hâlâ etkin.');
     if (!pending.abandon) {
       pending = { ...pending, version: 2, completion: 'unknown', abandon: {
@@ -375,14 +423,14 @@ export function abandonRecording(jwt: string, sessionId: string): Promise<void> 
       const { discardAbandonedBuffer } = await import('./encryptedChunkBuffer');
       await discardAbandonedBuffer(pending.ownerHash, sessionId);
     }
-    await clearLifecycle();
+    await clearLifecycle(pending);
   });
 }
 
 export function finish(jwt: string, sessionId: string): Promise<void> {
   return orderedLifecycle(async () => {
     if (activeLifecycleSession) throw new Error('Etkin kayıt otomatik kapatılamaz.');
-    const pending = await readLifecycle(jwt);
+    const pending = await readLifecycle(jwt, sessionId);
     if (!pending || pending.externalSessionId !== sessionId) throw new Error('Kayıt bağlantısı bulunamadı; kapanış doğrulanamadı.');
     await finishPending(jwt, pending);
   });

@@ -1,7 +1,27 @@
 import { fireEvent, render } from '@testing-library/react-native';
 import { TranscriptView, transcriptParagraphs } from '../TranscriptView';
+import { applyTranscriptEvents, initialTranscriptState, transcriptLineKey } from '../transcriptState';
 jest.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 const lines = [{ seq: 0, text: 'Merhaba', confirmed: 'Merhaba', tentative: '', status: 'stabilizing' as const }];
+
+it('renders repeated wire sequences in order, with an isolated warning only on the interrupted draft', () => {
+  const state = applyTranscriptEvents(initialTranscriptState(), [
+    { type: 'final', connectionId: 1, seq: 0, text: 'Önceki kesin cümle.' },
+    { type: 'partial', connectionId: 1, seq: 1, confirmed: 'Yarım', tentative: 'cümle' },
+    { type: 'connection_interrupted', connectionId: 1 },
+    { type: 'final', connectionId: 3, seq: 0, text: 'Sonraki kesin cümle.' },
+  ]);
+  const paragraphs = transcriptParagraphs(state.lines);
+  expect(paragraphs.map(p => p.map(line => line.text))).toEqual([
+    ['Önceki kesin cümle.'], ['Yarım cümle'], ['Sonraki kesin cümle.'],
+  ]);
+  expect(new Set(paragraphs.map(p => transcriptLineKey(p[0]))).size).toBe(3);
+  const screen = render(<TranscriptView lines={state.lines} />);
+  expect(screen.getByText('Önceki kesin cümle.')).toBeTruthy();
+  expect(screen.getByText('Sonraki kesin cümle.')).toBeTruthy();
+  expect(screen.getAllByText(/transcript.interruptedTag/)).toHaveLength(1);
+  expect(screen.queryByText(/transcript.revisedTag|transcript.stabilizingTag/)).toBeNull();
+});
 
 it('groups word fragments without losing sequence IDs or revised content', () => {
   const fragments = ['Sunumu', 'Zeynep', 'hazırlayacak.', 'Yarın'].map((text, seq) => ({

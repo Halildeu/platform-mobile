@@ -1,15 +1,21 @@
 import type { AnalysisSnapshot } from './liveAnalysis';
 import type { PersistedResult } from './persistedResult';
+import { recordingResultNotices } from './recordingResultNotices';
+import type { RecordingProvenance } from './recordingProvenance';
+import { recordingTranscriptNotices } from './transcriptExport';
 
 const escape = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;')
   .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
-export function transcriptHtml(text: string): string {
+export function transcriptHtml(text: string, document: RecordingProvenance): string {
+  const notices = recordingTranscriptNotices(document);
   return `<!DOCTYPE html><html lang="tr"><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">
 <title>Kaydedilmiş konuşma metni</title><style>@page { size: A4; margin: 18mm; }
-body { font: 12pt sans-serif; color: #172033; } p { white-space: pre-wrap; overflow-wrap: anywhere; }</style>
-</head><body><h1>Kaydedilmiş konuşma metni</h1><p>${escape(text)}</p></body></html>`;
+body { font: 12pt sans-serif; color: #172033; } p { white-space: pre-wrap; overflow-wrap: anywhere; }
+.notice { padding: 12px; border: 1px solid #bbc2cc; }</style>
+</head><body><h1>Kaydedilmiş konuşma metni</h1>
+${notices.length ? `<h2>Kayıt bilgisi</h2>${notices.map(notice => `<p class="notice">${escape(notice)}</p>`).join('')}<h2>Konuşma metni</h2>` : ''}<p>${escape(text)}</p></body></html>`;
 }
 
 /** Standalone HTML: no scripts, external fonts/images, or raw server fields. */
@@ -30,7 +36,7 @@ thead { display: table-header-group; } tr { break-inside: avoid; }
 .notice { padding: 12px; border: 1px solid #bbc2cc; }
 </style></head><body><h1>${title}</h1>
 <p class="notice">${notice}</p>
-${saved && snapshot.incompleteRecordingCount ? '<p class="notice">Bu toplantıda eksik kapatılan kayıt var; sonuç konuşmanın tamamını kapsamayabilir.</p>' : ''}
+${saved ? recordingResultNotices(snapshot).map(notice => `<p class="notice">${escape(notice)}</p>`).join('') : ''}
 <h2>Özet</h2><p>${escape(snapshot.summary || 'Gösterilebilir özet henüz yok.')}</p>
 <h2>Kararlar</h2>${snapshot.decisions.length ? `<ul>${snapshot.decisions.map(text => `<li>${escape(text)}</li>`).join('')}</ul>` : '<p>Henüz karar yok.</p>'}
 <h2>Aksiyonlar</h2><table><thead><tr><th>Aksiyon</th><th>Sorumlu</th><th>Tarih</th></tr></thead><tbody>
