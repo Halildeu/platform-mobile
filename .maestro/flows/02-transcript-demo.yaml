@@ -10,15 +10,15 @@ name: transcript-demo-revision
 - tapOn:
     id: "open-transcript-demo"
 - extendedWaitUntil:
-    visible: "Üçüncü kararımız: Salı saat 14’te değerlendirme toplantısı."
+    visible: ".*Üçüncü kararımız: Salı saat 14’te değerlendirme toplantısı."
     timeout: 20000
 - takeScreenshot: transcript-revised-demo
 - tapOn:
     id: "restart-transcript-demo"
     # Observe the cleared state before the 6.5-second replay finishes again.
     waitToSettleTimeoutMs: 0
-- assertNotVisible: "Üçüncü kararımız: Salı saat 14’te değerlendirme toplantısı."
+- assertNotVisible: ".*Üçüncü kararımız: Salı saat 14’te değerlendirme toplantısı."
 - extendedWaitUntil:
-    visible: "Üçüncü kararımız: Salı saat 14’te değerlendirme toplantısı."
+    visible: ".*Üçüncü kararımız: Salı saat 14’te değerlendirme toplantısı."
     timeout: 20000
 - takeScreenshot: transcript-replayed-demo
