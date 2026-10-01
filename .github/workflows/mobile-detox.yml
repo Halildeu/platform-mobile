@@ -90,16 +90,23 @@ jobs:
         with: { node-version: '22', cache: npm }
       - name: Install pinned iOS simulator utility
         shell: bash
-        env:
-          HOMEBREW_NO_AUTO_UPDATE: '1'
         run: |
           set -euo pipefail
           mkdir -p artifacts/detox
-          brew tap wix/brew
-          tap_root="$(brew --repository wix/brew)"
-          git -C "$tap_root" fetch --depth=1 origin 8f636f84541e08e850f455d7cffdfbd7ba305d3f
-          git -C "$tap_root" checkout --detach 8f636f84541e08e850f455d7cffdfbd7ba305d3f
-          brew install --build-from-source wix/brew/applesimutils
+          archive="$RUNNER_TEMP/applesimutils-0.9.12.tar.gz"
+          install_root="$RUNNER_TEMP/applesimutils-0.9.12"
+          curl --fail --location --retry 3 \
+            --output "$archive" \
+            https://github.com/wix/AppleSimulatorUtils/releases/download/0.9.12/applesimutils-0.9.12.arm64_big_sur.bottle.tar.gz
+          echo "3373d85ea6051e77865b0a22960eb0b5d63f3126c7c99232d0b6b9c83ee2c133  $archive" \
+            | shasum --algorithm 256 --check
+          mkdir -p "$install_root/bin"
+          tar -xzf "$archive" -C "$install_root"
+          install -m 0755 \
+            "$install_root/applesimutils/0.9.12/bin/applesimutils" \
+            "$install_root/bin/applesimutils"
+          echo "$install_root/bin" >> "$GITHUB_PATH"
+          export PATH="$install_root/bin:$PATH"
           command -v applesimutils
           applesimutils --version | tee artifacts/detox/applesimutils-version.txt
           grep -Eq '(^|[^0-9])0\.9\.12([^0-9]|$)' artifacts/detox/applesimutils-version.txt
