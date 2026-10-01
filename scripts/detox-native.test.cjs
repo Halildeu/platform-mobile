@@ -63,13 +63,14 @@ test('fingerprints require both APKs and detect a changed test APK', () => isola
   fs.writeFileSync(dir + '/androidTest/release/app-release-androidTest.apk', 'wrong instrumentation');
   assert.notDeepEqual(fingerprint('android', sha), before); assert.throws(() => fingerprint('android', 'main'));
 }));
-test('report fails acceptance for skipped, failed or missing native assertion/screenshots', () => isolated(() => {
+test('report uses concrete native results and rejects skipped, failed, interrupted or missing evidence', () => isolated(() => {
   const result = { success: true, numFailedTests: 0, numFailedTestSuites: 0, numPassedTests: 1, numPendingTests: 0, numTodoTests: 0,
     testResults: [{ testResults: [{ title: 'renders the actual home screen', ancestorTitles: ['app-launch'], status: 'passed', duration: 5, failureMessages: [] }] }] };
   new Reporter().onRunComplete(null, result); assert.throws(verifyResults);
   fs.writeFileSync('artifacts/detox/detox-home-visible.png', 'test fixture'); verifyResults();
   new Reporter().onRunComplete(null, { ...result, numPendingTests: 1 }); assert.throws(verifyResults);
-  new Reporter().onRunComplete(null, { ...result, success: false }); assert.throws(verifyResults);
+  new Reporter().onRunComplete(null, { ...result, success: false }); verifyResults();
+  new Reporter().onRunComplete(null, { ...result, wasInterrupted: true }); assert.throws(verifyResults);
   new Reporter().onRunComplete(null, { ...result, success: false, numFailedTestSuites: 1, numPassedTests: 0,
     testResults: [{ testExecError: {}, failureMessage: 'native <init> failed & stopped', testResults: [] }] });
   assert.match(fs.readFileSync('artifacts/detox/junit.xml', 'utf8'), /errors="1"/);

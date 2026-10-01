@@ -135,7 +135,7 @@ jobs:
         run: |
           set -euo pipefail
           node scripts/detox-artifacts.cjs verify ios "$(git rev-parse HEAD)"
-          npx detox test --configuration ios.sim.release --record-logs all --take-screenshots all --artifacts-location artifacts/detox/ui 2>&1 | tee artifacts/detox/detox.log
+          npx detox test --configuration ios.sim.release --headless --record-logs all --take-screenshots all --artifacts-location artifacts/detox/ui 2>&1 | tee artifacts/detox/detox.log
           node scripts/detox-artifacts.cjs results
       - uses: actions/upload-artifact@v4
         if: always()
