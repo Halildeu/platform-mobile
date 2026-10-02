@@ -16,6 +16,7 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      - run: node --test scripts/ios-scene-plugin.test.cjs
       - run: node --test scripts/ios-pcm-plugin.test.cjs
       - run: node --test scripts/detox-native.test.cjs
       - run: node --test scripts/fcm-config.check.js
