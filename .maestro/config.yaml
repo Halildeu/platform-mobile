@@ -18,4 +18,4 @@ executionOrder:
 # Runtime env exposed to every flow via `${MAESTRO_*}` — CI populates
 # from GitHub Actions secrets when the workflow_dispatch fires.
 env:
-  APP_ID: com.acikplatform.meetingintel
+  APP_ID: com.workcube.meeting

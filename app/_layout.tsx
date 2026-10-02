@@ -1,13 +1,21 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { useMeetingNotifications } from '../src/notifications/useMeetingNotifications';
+import { useExportCacheCleanup } from '../src/analysis/useResultExport';
+import { useAudioBufferCleanup } from '../src/audio/useAudioBufferCleanup';
+
+import '../src/i18n'; // i18next global örneğini başlatır (Türkçe varsayılan)
 
 /**
  * Root layout — Expo Router file-based routing.
  *
  * Faz 24 M6 Integration — PR-mobile-01 skeleton.
- * Auth guard, Redux Provider, i18n init sonraki sliceler'de eklenecek.
+ * Auth guard + Redux Provider sonraki sliceler'de eklenecek.
  */
-export default function RootLayout(): JSX.Element {
+export default function RootLayout() {
+  useMeetingNotifications();
+  useExportCacheCleanup();
+  useAudioBufferCleanup();
   return (
     <>
       <StatusBar style="light" />

@@ -1,0 +1,70 @@
+import { useEffect, useMemo, useState, type ReactElement } from 'react';
+import { Pressable, Text, View } from 'react-native';
+import { persistedResult, savedTranscript } from '../audio/liveTestApi';
+import { mobileSession } from '../auth/mobileSession';
+import { useResultExport } from './useResultExport';
+import { transcriptHtml } from './exportHtml';
+import { type SavedTranscriptDocument } from './savedTranscript';
+import { SavedSpeakerTranscript } from './SavedSpeakerTranscript';
+import { presentSavedTranscript } from './transcriptPresentation';
+import { parseRecordingProvenance } from './recordingProvenance';
+import { recordingTranscriptNotices, transcriptText } from './transcriptExport';
+
+async function loadTranscript(meetingId: string) {
+  const result = await persistedResult(meetingId);
+  return savedTranscript(meetingId, result.analysisRunId);
+}
+
+type Props = { meetingId: string; header?: ReactElement; load?: (meetingId: string) => Promise<SavedTranscriptDocument> };
+export function SavedTranscript(props: Props) {
+  return <TranscriptForMeeting key={props.meetingId} {...props} />;
+}
+function TranscriptForMeeting({ meetingId, header, load = loadTranscript }: Props) {
+  const [document, setDocument] = useState<SavedTranscriptDocument | null>(null);
+  const [original, setOriginal] = useState(false);
+  const presentation = useMemo(() => document ? presentSavedTranscript(document, original) : null, [document, original]);
+  const text = presentation?.text ?? null;
+  const [error, setError] = useState(false);
+  const [attempt, setAttempt] = useState(0);
+  const [scope, setScope] = useState<number | null>(null);
+  const exports = useResultExport(scope);
+  useEffect(() => {
+    let current = true;
+    const owner = mobileSession.contentScope();
+    void load(meetingId).then(value => {
+      if (!current) return;
+      if (owner === null || owner !== mobileSession.contentScope() || value.meetingId !== meetingId) { setError(true); return; }
+      const recording = parseRecordingProvenance(value, () => new Error('Konuşma metninin kayıt durumu doğrulanamadı.'));
+      setScope(owner); setDocument({ ...value, ...recording });
+    })
+      .catch(() => { if (current) setError(true); });
+    return () => { current = false; };
+  }, [meetingId, load, attempt]);
+  const controls = <View style={{ gap: 8 }}>
+    {header}
+    {!error && text === null && <Text style={{ color: '#94a3b8' }}>Kaydedilmiş konuşma metni yükleniyor…</Text>}
+    {error && <>
+      <Text accessibilityRole="alert" style={{ color: '#e2e8f0' }}>Kaydedilmiş konuşma metni alınamadı. Sonuç henüz hazır olmayabilir veya erişim sağlanamıyor.</Text>
+      <Pressable accessibilityRole="button" onPress={() => { setError(false); setDocument(null); setAttempt(value => value + 1); }}>
+        <Text style={{ color: '#93c5fd', paddingVertical: 12 }}>Yeniden dene</Text>
+      </Pressable>
+    </>}
+    {document && recordingTranscriptNotices(document).map(notice =>
+      <Text key={notice} accessibilityRole="alert" style={{ color: '#fbbf24' }}>{notice}</Text>)}
+    {text === '' && <Text style={{ color: '#e2e8f0' }}>Bu sonuçta konuşma metni boş.</Text>}
+    {document && !!text && <>
+      <Pressable accessibilityRole="button" disabled={exports.working} onPress={() => setOriginal(value => !value)}>
+        <Text style={{ color: '#93c5fd', paddingVertical: 12 }}>{original ? 'Okunabilir metni göster' : 'Orijinal metni göster'}</Text>
+      </Pressable>
+      <Pressable accessibilityRole="button" disabled={exports.working} onPress={() => void exports.copy(transcriptText(text, document))}>
+        <Text style={{ color: '#93c5fd', paddingVertical: 12 }}>Metnin tamamını kopyala</Text>
+      </Pressable>
+      <Pressable accessibilityRole="button" disabled={exports.working} onPress={() => void exports.pdf(transcriptHtml(text, document))}>
+        <Text style={{ color: '#93c5fd', paddingVertical: 12 }}>Kaydedilmiş metni PDF olarak paylaş</Text>
+      </Pressable>
+    </>}
+    {!!exports.message && <Text accessibilityRole="alert" style={{ color: '#e2e8f0' }}>{exports.message}</Text>}
+  </View>;
+  return <SavedSpeakerTranscript viewKey={meetingId + ':' + attempt}
+    document={document} owner={scope} rows={presentation?.rows} header={controls} />;
+}
