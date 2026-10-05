@@ -12,6 +12,7 @@ test('FCM build configuration rejects mismatched credentials and keeps other bui
     const config = { android: { package: 'com.workcube.meeting' }, extra: { eas: { projectId: 'preserved' } } };
     delete process.env.MOBILE_OTA_ENABLED;
     delete process.env.MOBILE_FCM_TEST;
+    delete process.env.MOBILE_AUDIO_BUFFER_RETENTION_MS;
     assert.equal(configure({ config }), config);
     process.env.MOBILE_FCM_TEST = '1';
     delete process.env.MOBILE_NATIVE_PUSH_ORG_ID;
@@ -41,7 +42,8 @@ test('FCM build configuration rejects mismatched credentials and keeps other bui
     assert.deepEqual(ota.extra.nativePush, result.extra.nativePush);
     assert.equal(ota.android.googleServicesFile, result.android.googleServicesFile);
   } finally {
-    for (const key of ['MOBILE_OTA_ENABLED', 'MOBILE_FCM_TEST', 'MOBILE_NATIVE_PUSH_ORG_ID', 'MOBILE_FCM_CONFIG_PATH']) {
+    for (const key of ['MOBILE_OTA_ENABLED', 'MOBILE_FCM_TEST', 'MOBILE_NATIVE_PUSH_ORG_ID', 'MOBILE_FCM_CONFIG_PATH',
+      'MOBILE_AUDIO_BUFFER_RETENTION_MS']) {
       if (saved[key] === undefined) delete process.env[key]; else process.env[key] = saved[key];
     }
     fs.rmSync(dir, { recursive: true, force: true });
