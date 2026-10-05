@@ -18,9 +18,18 @@ function profile(name) {
 }
 test('existing native builds retain OTA disabled; dedicated profiles require a new fingerprint-enabled build', () => {
   const oldOta = process.env.MOBILE_OTA_ENABLED, oldFcm = process.env.MOBILE_FCM_TEST;
+  const oldRetention = process.env.MOBILE_AUDIO_BUFFER_RETENTION_MS;
   try {
     delete process.env.MOBILE_OTA_ENABLED; delete process.env.MOBILE_FCM_TEST;
-    assert.equal(appConfig({ config: globalThis.structuredClone(base) }).updates.enabled, false);
+    delete process.env.MOBILE_AUDIO_BUFFER_RETENTION_MS;
+    const unchanged = appConfig({ config: globalThis.structuredClone(base) });
+    assert.equal(unchanged.updates.enabled, false);
+    assert.equal(unchanged.extra.audioBufferRetentionMs, undefined);
+    process.env.MOBILE_AUDIO_BUFFER_RETENTION_MS = '900000';
+    assert.equal(appConfig({ config: globalThis.structuredClone(base) }).extra.audioBufferRetentionMs, 900000);
+    process.env.MOBILE_AUDIO_BUFFER_RETENTION_MS = '900001';
+    assert.throws(() => appConfig({ config: globalThis.structuredClone(base) }), /15 minute retention/);
+    delete process.env.MOBILE_AUDIO_BUFFER_RETENTION_MS;
     process.env.MOBILE_OTA_ENABLED = '1';
     const configured = appConfig({ config: globalThis.structuredClone(base) });
     assert.equal(configured.updates.enabled, true);
@@ -30,6 +39,7 @@ test('existing native builds retain OTA disabled; dedicated profiles require a n
   } finally {
     if (oldOta === undefined) delete process.env.MOBILE_OTA_ENABLED; else process.env.MOBILE_OTA_ENABLED = oldOta;
     if (oldFcm === undefined) delete process.env.MOBILE_FCM_TEST; else process.env.MOBILE_FCM_TEST = oldFcm;
+    if (oldRetention === undefined) delete process.env.MOBILE_AUDIO_BUFFER_RETENTION_MS; else process.env.MOBILE_AUDIO_BUFFER_RETENTION_MS = oldRetention;
   }
   assert.equal(eas.cli.version, EAS_VERSION);
   for (const channel of ['development', 'preview', 'production']) {
@@ -38,6 +48,14 @@ test('existing native builds retain OTA disabled; dedicated profiles require a n
     assert.equal(p.env.MOBILE_OTA_ENABLED, '1'); assert.notEqual(p.ios?.simulator, true);
     assert.notEqual(p.developmentClient, true);
   }
+});
+
+test('only TEST package paths enable the fixed encrypted audio retention', () => {
+  assert.equal(profile('preview').env.MOBILE_AUDIO_BUFFER_RETENTION_MS, '900000');
+  assert.equal(profile('production').env.MOBILE_AUDIO_BUFFER_RETENTION_MS, undefined);
+  assert.equal(profile('development').env.MOBILE_AUDIO_BUFFER_RETENTION_MS, undefined);
+  const workflow = YAML.parse(readFileSync('.github/workflows/e2e-mobile.yml', 'utf8'));
+  assert.equal(workflow.jobs['build-android-apk'].env.MOBILE_AUDIO_BUFFER_RETENTION_MS, '900000');
 });
 test('EAS upload excludes server credentials, signing files and receipts without excluding application source', () => {
   const uploads = ignore().add(readFileSync('.easignore', 'utf8'));

@@ -37,7 +37,10 @@
     "preview": {
       "channel": "preview",
       "environment": "preview",
-      "env": { "MOBILE_OTA_ENABLED": "0" },
+      "env": {
+        "MOBILE_OTA_ENABLED": "0",
+        "MOBILE_AUDIO_BUFFER_RETENTION_MS": "900000"
+      },
       "distribution": "internal",
       "ios": {
         "simulator": false

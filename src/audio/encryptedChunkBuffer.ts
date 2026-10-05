@@ -210,6 +210,12 @@ export async function discardAbandonedBuffer(ownerHash: string, sessionId: strin
   finally { bufferJournal.release(id, lease); }
 }
 
+export async function discardOwnerAudioBuffers(ownerHash: string): Promise<boolean> {
+  const records = (await bufferJournal.list()).filter(row => row.ownerHash === ownerHash);
+  for (const record of records) await discardAbandonedBuffer(ownerHash, record.sessionId);
+  return !(await bufferJournal.list()).some(row => row.ownerHash === ownerHash);
+}
+
 /** Runs on next app execution/foreground, not while the OS has terminated the process. */
 export async function sweepEncryptedChunkBuffers(): Promise<void> {
   let failed = false;

@@ -1,8 +1,12 @@
-import { begin, completeCapture, captureStopped, abandonRecording, createMeeting, finish, persistedResult } from '../liveTestApi';
+import { begin, completeCapture, captureStopped, abandonRecording, createMeeting, finish, logout, persistedResult, CONSENT } from '../liveTestApi';
 import { mobileSession } from '../../auth/mobileSession';
 import * as SecureStore from 'expo-secure-store';
 import { createHash } from 'node:crypto';
 import { BUFFER_JOURNAL_KEY } from '../nativeBufferJournal';
+import * as nativePush from '../../notifications/nativePush';
+import { resultExporter } from '../../analysis/nativeResultExport';
+jest.mock('../../notifications/nativePush', () => ({ disableNativePush: jest.fn() }));
+jest.mock('../../analysis/nativeResultExport', () => ({ resultExporter: { cleanup: jest.fn() } }));
 const requestId = '12345678-1234-1234-1234-123456789abc';
 const meetingId = '12345678-1234-1234-1234-123456789012';
 const claims = { iss: 'https://testai.acik.com/realms/platform-test', sub: 'test-user', companyId: 'test-company' };
@@ -13,14 +17,36 @@ const startedAt = new Date(1789232900000).toISOString();
 const receipt = { ownerHash, meetingId, externalSessionId: 'SES-session-1', startedAt, endedAt: null, version: 2, completion: 'confirmed' };
 const linked = { ...receipt, sessionId: requestId, meetingStatus: 'IN_PROGRESS', transcriptStatus: 'PENDING' };
 let stored: string | null = null;
+let mockAudioStored: string | null = null;
 beforeEach(() => {
   stored = JSON.stringify(receipt);
+  mockAudioStored = null;
   jest.spyOn(mobileSession, 'valid').mockResolvedValue({ jwt, expiresAt: Date.now() + 60000 });
-  jest.spyOn(SecureStore, 'getItemAsync').mockImplementation(async readKey => readKey === key ? stored : null);
-  jest.spyOn(SecureStore, 'setItemAsync').mockImplementation(async (_key, value) => { stored = value; });
-  jest.spyOn(SecureStore, 'deleteItemAsync').mockImplementation(async () => { stored = null; });
+  jest.spyOn(SecureStore, 'getItemAsync').mockImplementation(async readKey =>
+    readKey === key ? stored : readKey === BUFFER_JOURNAL_KEY ? mockAudioStored : null);
+  jest.spyOn(SecureStore, 'setItemAsync').mockImplementation(async (writeKey, value) => {
+    if (writeKey === BUFFER_JOURNAL_KEY) mockAudioStored = value; else stored = value;
+  });
+  jest.spyOn(SecureStore, 'deleteItemAsync').mockImplementation(async deleteKey => {
+    if (deleteKey === BUFFER_JOURNAL_KEY) mockAudioStored = null; else stored = null;
+  });
 });
 afterEach(() => { jest.restoreAllMocks(); });
+
+it('discloses TEST retention and verifies audio cleanup before logout succeeds', async () => {
+  jest.spyOn(nativePush, 'disableNativePush').mockResolvedValue(true);
+  jest.spyOn(resultExporter, 'cleanup').mockResolvedValue(undefined);
+  jest.spyOn(mobileSession, 'logout').mockResolvedValue(true);
+
+  expect(CONSENT).toContain('en fazla 15 dakika');
+  expect(CONSENT).toContain('çıkış yaptığımda silinir');
+  const loggedOut = await logout();
+  expect(mobileSession.valid).toHaveBeenCalledTimes(1);
+  expect(nativePush.disableNativePush).toHaveBeenCalledTimes(1);
+  expect(resultExporter.cleanup).toHaveBeenCalledWith(true);
+  expect(mobileSession.logout).toHaveBeenCalledTimes(1);
+  expect(loggedOut).toBe(true);
+});
 
 it.each(['creating', 'ready', 'lost', 'deleting'].flatMap(state => ['finish', 'saved'].map(path => ({ state, path }))))('refuses HTTP finish before durable buffer recovery: %j', async ({ state, path }) => {
   const id = createHash('sha256').update(JSON.stringify([ownerHash, receipt.externalSessionId])).digest('hex');

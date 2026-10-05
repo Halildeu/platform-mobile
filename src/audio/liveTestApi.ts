@@ -157,7 +157,7 @@ async function finishPending(jwt: string, pending: PendingLifecycle): Promise<vo
   await syncLifecycle(jwt, pending);
   await clearLifecycle(pending);
 }
-export const CONSENT = 'Bu kısa test sırasında mikrofon sesim, konuşmamı yazıya dönüştürmek için Workcube sunucusuna şifreli bağlantıyla iletilecek. Cihazda ses dosyası saklanmayacak. Ses işlemeyi kabul ediyorum.';
+export const CONSENT = 'Bu kısa test sırasında mikrofon sesim, konuşmamı yazıya dönüştürmek için Workcube sunucusuna şifreli bağlantıyla iletilecek. TEST yapılandırmasında gönderilemeyen ses parçaları cihazda şifreli olarak en fazla 15 dakika geçici tutulabilir; gönderildiğinde, süre dolduğunda veya çıkış yaptığımda silinir. Ses işlemeyi kabul ediyorum.';
 
 export async function restoreSession() {
   const value = await mobileSession.valid();
@@ -165,10 +165,21 @@ export async function restoreSession() {
 }
 export async function logout(): Promise<boolean> {
   // Invalidates in-flight exports before remote revocation. Failed cleanup is retried by the cache sweep.
+  const session = await mobileSession.valid().catch(() => null);
   await resultExporter.cleanup(true).catch(() => {});
   const pushCleared = await disableNativePush().catch(() => false);
+  const audioCleared = session
+    ? await clearAudioBuffersForLogout(session.jwt).catch(() => false)
+    : await bufferJournal.list().then(records => records.length === 0).catch(() => false);
   const sessionCleared = await mobileSession.logout();
-  return pushCleared && sessionCleared;
+  return pushCleared && audioCleared && sessionCleared;
+}
+
+async function clearAudioBuffersForLogout(jwt: string): Promise<boolean> {
+  const ownerHash = await lifecycleOwner(jwt);
+  if (!(await bufferJournal.list()).some(row => row.ownerHash === ownerHash)) return true;
+  const { discardOwnerAudioBuffers } = await import('./encryptedChunkBuffer');
+  return discardOwnerAudioBuffers(ownerHash);
 }
 export async function validSession(minRemainingMs = 60000): Promise<{ jwt: string; expiresAt: number }> {
   const session = await mobileSession.valid(minRemainingMs);

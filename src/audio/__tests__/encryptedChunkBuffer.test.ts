@@ -6,7 +6,7 @@ import { join, resolve, dirname, basename } from 'node:path';
 import * as SQLite from 'expo-sqlite';
 import * as SecureStore from 'expo-secure-store';
 import { bufferJournal, BUFFER_JOURNAL_KEY } from '../nativeBufferJournal';
-import { discardAbandonedBuffer, openEncryptedChunkBuffer, reopenEncryptedChunkBuffer, sweepEncryptedChunkBuffers } from '../encryptedChunkBuffer';
+import { discardAbandonedBuffer, discardOwnerAudioBuffers, openEncryptedChunkBuffer, reopenEncryptedChunkBuffer, sweepEncryptedChunkBuffers } from '../encryptedChunkBuffer';
 import { replayPendingAudio } from '../pendingAudioReplay';
 import type { LiveSocket } from '../foregroundStream';
 import { createRecordingBuffer } from '../recordingBuffer';
@@ -365,4 +365,17 @@ test('explicit abandonment erases retained audio only after releasing its native
   expect(existsSync(file(o.sessionId))).toBe(false); expect(stored.has(key(o.sessionId))).toBe(false);
   expect((await bufferJournal.list()).some(row => row.sessionId === o.sessionId)).toBe(false);
   await discardAbandonedBuffer(ownerScope, o.sessionId);
+});
+
+test('logout cleanup erases every retained buffer for the signed-in owner', async () => {
+  const first = options(); const second = options();
+  const firstHandle = await openEncryptedChunkBuffer(first);
+  const secondHandle = await openEncryptedChunkBuffer(second);
+  firstHandle.buffer.enqueue(pcm); secondHandle.buffer.enqueue({ ...pcm, chunkSeq: 1 });
+  firstHandle.close(); secondHandle.close();
+
+  await expect(discardOwnerAudioBuffers(ownerScope)).resolves.toBe(true);
+  expect(existsSync(file(first.sessionId))).toBe(false);
+  expect(existsSync(file(second.sessionId))).toBe(false);
+  expect(await bufferJournal.list()).toEqual([]);
 });

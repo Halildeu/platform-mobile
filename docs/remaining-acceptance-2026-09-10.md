@@ -10,7 +10,7 @@ GitHub issue kapanışı, uzaktan CI başarısı veya cihaz kabulü beyan edilme
 | #4 | PCM ve gateway istemcisi mevcut; gerçek sunucu ready aşamasındaki 1011 engeli çözülmeden uçtan uca kabul yok. |
 | #5 | Canlı ekran durum geçişleri ve takip kontrolü bağlı. Cihazda uzun toplantı performansı ve gerçek revizyon akışı eksik. |
 | #6 | Android PCM foreground service, görünür bildirim/native stop ve iOS interruption/reset/deadline PoC kodu eklendi. Yalnız yeni native capability bulunan build'de kullanıcı seçeneği açılır. 60 saniyelik test sınırı sürer. Native derleme ve gerçek ekran kilidi/cihaz kabulü bekleniyor. |
-| #7 | Gerçek akışta bellekte tampon, ACK bekleme ve üç denemeli ağ yeniden bağlantısı bağlı. SQLCipher build desteği/anahtar silme hazır; yetkili saklama süresi ve kalıcı tamponu gerçek akışa bağlama hâlâ eksik. ACK kalıcı transkript kanıtı değildir. |
+| #7 | Preview/QA TEST paketinde 15 dakikalık şifreli tampon gerçek akışa bağlandı; gönderim, süre dolumu ve çıkış temizliği var. Üretim kapalıdır. Android cihazda ağ kesme/yeniden bağlanma, SQLCipher disk doğrulaması ve sunucunun kalıcı işleme makbuzu hâlâ gereklidir; gateway ACK kalıcı transkript kanıtı değildir. |
 | #8 | Doğrulanmış analiz, aksiyonlar, Markdown paylaşımı ve sistem PDF/yazdırma ekranı bağlı. PDF cihaz kabulü, konuşmacı düzenleme sözleşmesi ve ERP aktarımı eksik. |
 | #9 | İncelenen notification-orchestrator PushSubscriptionController tarayıcı RFC8030 aboneliği ister: endpointUrl, p256dhKey, authSecret. Bu sözleşme native FCM/APNs token kaydı değildir. Native kayıt/gönderim sözleşmesi ve cihaz bildirim testi gerekli. |
 | #10 | Android dahili APK derlenmişti. iOS imzalama ve TestFlight/Play dağıtım kabulü eksik. |

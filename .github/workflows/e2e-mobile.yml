@@ -46,6 +46,7 @@ jobs:
       CI: "1"
       EXPO_NO_TELEMETRY: "1"
       MAESTRO_CLI_NO_ANALYTICS: "1"
+      MOBILE_AUDIO_BUFFER_RETENTION_MS: "900000"
     steps:
       - uses: actions/checkout@v4
       - name: Measure disk before build

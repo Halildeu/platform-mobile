@@ -1,8 +1,9 @@
 # ADR 0017 — Durable audio discovery and loss-aware cleanup
 
-Status: source preparation for #7. Retention remains unset/off. Cold replay,
-explicit recovery/abandon UI and native Android/iOS acceptance remain required
-before activation. This ADR supplements 0001 and the KVKK boundary ADR-0030.
+Status: the 15-minute encrypted buffer is enabled only for preview/QA TEST
+packages as approved on 2026-10-05. Production remains off. Native Android/iOS
+acceptance and a server-side durable processing receipt remain required before
+production activation. This ADR supplements 0001 and the KVKK boundary ADR-0030.
 
 ## Failure and decision
 
@@ -46,15 +47,16 @@ still do not prove final transcript/analysis persistence.
 Closed-buffer expiry runs at app-root mount, foreground and a one-minute
 timer while the app is active. It uses the ORIGINAL configured retention;
 restart does not extend deadlines. Active handles retain their expiry timer.
-Cold replay is not implemented by this delta.
+Cold replay is not implemented by this delta. Logout deletes every discoverable
+buffer belonging to the signed-in account before the local session is cleared;
+an unverifiable deletion makes logout report failure instead of claiming success.
 
 Android/iOS cannot guarantee JavaScript execution at a retention deadline while
 the user/OS has killed the process. This design performs physical cleanup on
 the next execution, not an exact-deadline background deletion guarantee. If the
 approved requirement demands no disk persistence beyond such a deadline, the
-existing memory-only mode is the appropriate alternative. Do not enable durable
-storage by merely choosing a duration. Retention policy remains an operator
-decision deferred by the user.
+existing memory-only mode is the appropriate alternative. Configuration accepts
+only the approved 900000 ms value and rejects other durations at build time.
 
 ## Verification and outstanding acceptance
 
@@ -62,5 +64,6 @@ Tests use actual SQLite for rollback, reopened loss counters and persistent-file
 cleanup, with injected native boundaries. A synthetic cipher capability in
 those tests does not validate SQLCipher. Native keychain/keystore protection,
 encrypted on-disk bytes, OS interruptions, long recordings and physical expiry
-still require an Android/iOS package and device tests. No raw retention setting
-or existing server/tenant state is changed.
+still require an Android/iOS package and device tests. The root alternative for
+durable transcript proof is tracked server-side; gateway admission ACK remains
+insufficient.
