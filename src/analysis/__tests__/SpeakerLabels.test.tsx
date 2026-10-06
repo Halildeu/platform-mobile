@@ -90,6 +90,82 @@ test('account change rejects late names and makes old editor inert', async () =>
   expect(screen.queryByText('Zeynep')).toBeNull();
   expect(screen.queryByText('Adı düzenle')).toBeNull();
 });
+
+test.each([
+  { analysisRunId: id(5) },
+  { sessionId: id(5) },
+  { finalizationVersion: 2 },
+  { transcriptSha256: 'b'.repeat(64) },
+])('a stable view key cannot retain names or edit permission across occurrence changes: %j', async changed => {
+  let rejectNext!: (reason: Error) => void;
+  const api = jest.fn().mockResolvedValueOnce(saved)
+    .mockImplementationOnce(() => new Promise((_, reject) => { rejectNext = reject; }));
+  const screen = render(<SavedSpeakerTranscript viewKey="same-view" document={doc} owner={1} api={api} />);
+  await waitFor(() => expect(screen.getByText('Zeynep')).toBeTruthy());
+  fireEvent.press(screen.getByLabelText('Konuşmacı 1 adını düzenle'));
+  fireEvent.changeText(screen.getByLabelText('Konuşmacı adı'), 'Eski taslak');
+  screen.rerender(<SavedSpeakerTranscript viewKey="same-view" document={{ ...doc, ...changed }} owner={1} api={api} />);
+  expect(screen.queryByText('Zeynep')).toBeNull();
+  expect(screen.queryByLabelText('Konuşmacı adı')).toBeNull();
+  expect(screen.queryByText('Adı düzenle')).toBeNull();
+  await act(async () => rejectNext(new Error('unavailable')));
+  expect(screen.queryByText('Zeynep')).toBeNull();
+  expect(screen.queryByText('Adı düzenle')).toBeNull();
+  expect(screen.getByText('Bir.')).toBeTruthy();
+});
+
+test('a stable view key does not carry a pending save lock into the next occurrence', async () => {
+  let finishOldSave!: (value: SpeakerLabels) => void;
+  const api = jest.fn().mockResolvedValueOnce(empty)
+    .mockImplementationOnce(() => new Promise(resolve => { finishOldSave = resolve; }))
+    .mockResolvedValueOnce(empty).mockResolvedValueOnce(saved);
+  const screen = render(<SavedSpeakerTranscript viewKey="same-view" document={doc} owner={1} api={api} />);
+  await waitFor(() => expect(screen.getByLabelText('Konuşmacı 1 adını düzenle')).toBeTruthy());
+  fireEvent.press(screen.getByLabelText('Konuşmacı 1 adını düzenle'));
+  fireEvent.changeText(screen.getByLabelText('Konuşmacı adı'), 'Eski ad');
+  fireEvent.press(screen.getByText('Adı kaydet'));
+  const next = { ...doc, analysisRunId: id(5) };
+  screen.rerender(<SavedSpeakerTranscript viewKey="same-view" document={next} owner={1} api={api} />);
+  await waitFor(() => expect(api).toHaveBeenNthCalledWith(3, next, 1));
+  await act(async () => finishOldSave(saved));
+  fireEvent.press(screen.getByLabelText('Konuşmacı 1 adını düzenle'));
+  expect(screen.getByLabelText('Konuşmacı adı')).toBeTruthy();
+  fireEvent.changeText(screen.getByLabelText('Konuşmacı adı'), 'Zeynep');
+  fireEvent.press(screen.getByText('Adı kaydet'));
+  await waitFor(() => expect(api).toHaveBeenNthCalledWith(4, next, 1,
+    { scope: id(4), speaker: 'S7', name: 'Zeynep', expectedRevision: 0 }));
+});
+
+test('a stable view key cannot retain loaded names when the account changes', async () => {
+  const api = jest.fn().mockResolvedValueOnce(saved).mockImplementationOnce(() => new Promise(() => {}));
+  const screen = render(<SavedSpeakerTranscript viewKey="same-view" document={doc} owner={1} api={api} />);
+  await waitFor(() => expect(screen.getByText('Zeynep')).toBeTruthy());
+  jest.mocked(mobileSession.contentScope).mockReturnValue(2);
+  screen.rerender(<SavedSpeakerTranscript viewKey="same-view" document={doc} owner={2} api={api} />);
+  expect(screen.queryByText('Zeynep')).toBeNull();
+  expect(screen.queryByText('Adı düzenle')).toBeNull();
+  expect(api).toHaveBeenLastCalledWith(doc, 2);
+});
+
+test('an equivalent document refresh does not cancel an in-flight save or leave the editor busy', async () => {
+  let finish!: (value: SpeakerLabels) => void;
+  const api = jest.fn().mockResolvedValueOnce(empty)
+    .mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  const screen = render(<SavedSpeakerTranscript viewKey="same-view" document={doc} owner={1} api={api} />);
+  await waitFor(() => expect(screen.getByLabelText('Konuşmacı 1 adını düzenle')).toBeTruthy());
+  fireEvent.press(screen.getByLabelText('Konuşmacı 1 adını düzenle'));
+  fireEvent.changeText(screen.getByLabelText('Konuşmacı adı'), 'Zeynep');
+  fireEvent.press(screen.getByText('Adı kaydet'));
+  screen.rerender(<SavedSpeakerTranscript viewKey="same-view" document={{ ...doc }} owner={1} api={api} />);
+  await act(async () => finish(saved));
+  expect(api).toHaveBeenCalledTimes(2);
+  expect(screen.getByText('Konuşmacı adı kaydedildi.')).toBeTruthy();
+  expect(screen.getByText('Zeynep')).toBeTruthy();
+  expect(screen.getByLabelText('Konuşmacı 1 adını düzenle')).not.toBeDisabled();
+  fireEvent.press(screen.getByLabelText('Konuşmacı 1 adını düzenle'));
+  expect(screen.getByLabelText('Konuşmacı adı').props.value).toBe('Zeynep');
+});
+
 test('legacy text and unknown speakers are still readable without a label request', () => {
   const api = jest.fn();
   const legacy = render(<SavedSpeakerTranscript document={{ ...doc, segments: undefined }} owner={1} api={api} />);

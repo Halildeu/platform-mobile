@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
+import { useEffectEvent, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { FlatList, Pressable, Text, TextInput, View } from 'react-native';
 import { mobileSession } from '../auth/mobileSession';
 import { savedSpeakerLabels } from '../audio/liveTestApi';
@@ -19,28 +19,41 @@ function SpeakerTranscriptForOccurrence({ document, owner, header, rows: project
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState('');
-  const generation = useRef<{ active: boolean } | null>(null), locked = useRef(false);
+  const generation = useRef<{ active: boolean; locked: boolean } | null>(null);
+  const occurrenceKey = JSON.stringify([owner, document?.meetingId, document?.analysisRunId,
+    document?.sessionId, document?.finalizationVersion, document?.transcriptSha256]);
+  const [stateOccurrence, setStateOccurrence] = useState(occurrenceKey);
+  if (stateOccurrence !== occurrenceKey) {
+    // Reset only speaker state before children render; remounting the list would
+    // erase an in-progress meeting title in its header when the document loads.
+    setStateOccurrence(occurrenceKey); setLabels(null); setEditTarget(null);
+    setName(''); setBusy(false); setMessage('');
+  }
   const hasSpeakers = rows.some(row => row.speakerKey);
-  useEffect(() => {
-    const currentGeneration = { active: true };
-    generation.current = currentGeneration;
+  const loadLabels = useEffectEvent((currentGeneration: { active: boolean; locked: boolean }) => {
     const current = () => currentGeneration.active && generation.current === currentGeneration && owner !== null && mobileSession.contentScope() === owner;
     if (hasSpeakers && document && owner !== null && validSpeakerDocument(document)) {
       void api(document, owner).then(value => { if (current()) setLabels(value); })
         .catch(() => { if (current()) setMessage('Konuşmacı adları şu an yüklenemedi. Tam metin kullanılabilir.'); });
     }
+  });
+  useLayoutEffect(() => {
+    const currentGeneration = { active: true, locked: false };
+    generation.current = currentGeneration;
+    loadLabels(currentGeneration);
     return () => { currentGeneration.active = false; };
-  }, [api, document, owner, hasSpeakers]);
+  }, [api, occurrenceKey, hasSpeakers]);
 
   const labelFor = (key: SpeakerKey) => labels?.labels.find(label => speakerKey(label) === speakerKey(key))?.name;
   async function save(remove: boolean) {
-    if (!document || !editing || !labels?.editable || owner === null || locked.current || mobileSession.contentScope() !== owner) return;
+    const currentGeneration = generation.current;
+    if (!document || !editing || !labels?.editable || owner === null || !currentGeneration?.active
+      || currentGeneration.locked || mobileSession.contentScope() !== owner) return;
     let normalized: string | null;
     try { normalized = remove ? null : normalizeSpeakerName(name); }
     catch { setMessage('Ad 1–80 karakter olmalı; satır sonu veya kontrol karakteri içermemeli.'); return; }
-    const currentGeneration = generation.current;
     const current = () => !!currentGeneration?.active && generation.current === currentGeneration && mobileSession.contentScope() === owner;
-    locked.current = true; setBusy(true); setMessage('');
+    currentGeneration.locked = true; setBusy(true); setMessage('');
     const edit = { ...editing, name: normalized, expectedRevision: labels.revision };
     try {
       const result = await api(document, owner, edit);
@@ -54,7 +67,7 @@ function SpeakerTranscriptForOccurrence({ document, owner, header, rows: project
           if (current()) { setLabels(latest); setMessage('İşlem sonucu kesinleştirilemedi. Sunucudaki güncel adlar yüklendi; kontrol edip yeniden düzenleyebilirsiniz.'); }
         } catch { if (current()) setMessage('Konuşmacı adı doğrulanamadı. Toplantıyı yeniden açıp güncel adları kontrol edin.'); }
       }
-    } finally { locked.current = false; if (current()) setBusy(false); }
+    } finally { currentGeneration.locked = false; if (current()) setBusy(false); }
   }
   const controls = <View style={{ gap: 8 }}>
     {header}
