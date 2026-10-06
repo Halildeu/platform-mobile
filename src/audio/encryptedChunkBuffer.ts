@@ -6,11 +6,15 @@ import { OfflineAudioBuffer } from './offlineBuffer';
 import { SqliteChunkStore, type SqliteLike } from './sqliteChunkStore';
 import { bufferJournal } from './nativeBufferJournal';
 import type { BufferRecord } from './audioBufferJournal';
+import { databaseFileUri } from '../diagnostics/databaseFileUri';
 
 const keyName = (id: string) => `audio-buffer-${id}`;
 const fileName = (id: string) => `audio-${id}.db`;
-const fileExists = (id: string) => new File(SQLite.defaultDatabaseDirectory, fileName(id)).exists;
-const sidecars = (id: string) => ['-wal', '-shm', '-journal'].map(suffix => new File(SQLite.defaultDatabaseDirectory, fileName(id) + suffix));
+// SQLite returns a native absolute path. File requires a file:// URI on-device.
+// Apply the same conversion to creation, recovery and every sidecar cleanup.
+const databaseDirectory = () => databaseFileUri(SQLite.defaultDatabaseDirectory);
+const fileExists = (id: string) => new File(databaseDirectory(), fileName(id)).exists;
+const sidecars = (id: string) => ['-wal', '-shm', '-journal'].map(suffix => new File(databaseDirectory(), fileName(id) + suffix));
 const anyFileExists = (id: string) => fileExists(id) || sidecars(id).some(file => file.exists);
 // Failed native close holds the lease. Retry that exact handle, never open another one.
 const failedOpens = new Map<string, () => void>();

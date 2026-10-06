@@ -12,10 +12,18 @@ import type { LiveSocket } from '../foregroundStream';
 import { createRecordingBuffer } from '../recordingBuffer';
 
 let mockDirectory: string;
-jest.mock('expo-sqlite', () => ({ get defaultDatabaseDirectory() { return mockDirectory; }, openDatabaseSync: jest.fn(), deleteDatabaseSync: jest.fn() }));
+let mockNativeDirectory: string;
+jest.mock('expo-sqlite', () => ({ get defaultDatabaseDirectory() { return mockNativeDirectory; }, openDatabaseSync: jest.fn(), deleteDatabaseSync: jest.fn() }));
 jest.mock('expo-file-system', () => ({ File: class {
   path: string;
-  constructor(directory: string, file: string) { this.path = jest.requireActual('node:path').join(directory, file); }
+  constructor(directory: string, file: string) {
+    // Expo Android delegates to java.io.File(URI), which rejects a bare POSIX path.
+    // Do not let a permissive Node path mock hide the actual device boundary.
+    if (!directory.startsWith('file:///')) throw new Error('URI is not absolute');
+    const decoded = decodeURIComponent(directory.slice('file://'.length));
+    if (decoded !== mockNativeDirectory) throw new Error('Wrong native directory');
+    this.path = jest.requireActual('node:path').join(mockDirectory, file);
+  }
   get exists() { return jest.requireActual('node:fs').existsSync(this.path); }
   delete() { jest.requireActual('node:fs').rmSync(this.path); }
 } }));
@@ -38,6 +46,7 @@ beforeEach(() => {
   jest.useFakeTimers(); jest.resetAllMocks(); handles = []; stored = new Map();
   directory = mkdtempSync(join(tmpdir(), 'mobile-buffer-test-'));
   mockDirectory = directory;
+  mockNativeDirectory = '/data/user/0/com.workcube.meeting/files/SQLite';
   jest.mocked(SecureStore.getItemAsync).mockImplementation(async name => stored.get(name) ?? null);
   jest.mocked(SecureStore.setItemAsync).mockImplementation(async (name, value) => { stored.set(name, value); });
   jest.mocked(SecureStore.deleteItemAsync).mockImplementation(async name => { stored.delete(name); });
@@ -55,6 +64,23 @@ beforeEach(() => {
     };
     return adapter as unknown as SQLite.SQLiteDatabase;
   });
+});
+
+test.each([
+  '/data/user/0/com.workcube.meeting/files/SQLite',
+  '/var/mobile/Containers/Data/Application/Örnek % #?/Library/SQLite',
+])('encrypted recording opens, reopens and cleans up with native database directory %s', async nativeDirectory => {
+  mockNativeDirectory = nativeDirectory;
+  const opts = options();
+  const handle = await createRecordingBuffer({ ...opts, ownerScope: async () => ownerScope, onStorageError: jest.fn() }, openEncryptedChunkBuffer);
+  handle.buffer.enqueue(pcm);
+  expect(await handle.release()).toBe('retained');
+  const recovered = await reopenEncryptedChunkBuffer(opts);
+  expect(recovered.buffer.pending()).toBe(1);
+  recovered.close();
+  await discardAbandonedBuffer(ownerScope, opts.sessionId);
+  expect(existsSync(file(opts.sessionId))).toBe(false);
+  expect(await bufferJournal.list()).toEqual([]);
 });
 afterEach(() => {
   for (const item of handles) { try { item.db.close(); } catch {} }
@@ -166,6 +192,24 @@ test('creating intent survives key write failure and is cleaned on next executio
   expect(SQLite.openDatabaseSync).not.toHaveBeenCalled();
   await sweepEncryptedChunkBuffers();
   expect((await bufferJournal.list())[0].state).toBe('lost');
+});
+
+test('pre-microphone URI failure from the previous APK can be cleaned without inventing delivery', async () => {
+  const opts = options();
+  stored.set(BUFFER_JOURNAL_KEY, JSON.stringify({ version: 1, records: [{
+    id: identity(opts.sessionId), ownerHash: ownerScope, sessionId: opts.sessionId,
+    retentionMs: opts.retentionMs, state: 'creating',
+  }] }));
+  await sweepEncryptedChunkBuffers();
+  expect(SQLite.openDatabaseSync).not.toHaveBeenCalled();
+  expect((await bufferJournal.list())[0].state).toBe('lost');
+  await expect(bufferJournal.assertFinishAllowed(ownerScope, opts.sessionId)).rejects.toThrow('Bekleyen');
+  // The normal explicit-abandon flow calls this only after server acknowledgements.
+  await discardAbandonedBuffer(ownerScope, opts.sessionId);
+  expect(await bufferJournal.list()).toEqual([]);
+  const next = await openEncryptedChunkBuffer(options());
+  await next.confirmDrained(); await next.destroy();
+  expect(await bufferJournal.list()).toEqual([]);
 });
 
 test('unexpected old file is never overwritten or interpreted as an empty queue', async () => {

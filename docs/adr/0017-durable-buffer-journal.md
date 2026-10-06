@@ -60,6 +60,16 @@ only the approved 900000 ms value and rejects other durations at build time.
 
 ## Verification and outstanding acceptance
 
+The 2026-10-06 TEST startup regression exposed a native path boundary: SQLite
+returns an absolute POSIX directory, while Expo File delegates to `File(URI)`
+on Android and requires a `file://` URI. Audio storage now uses the existing
+`databaseFileUri` conversion for file existence and every sidecar operation,
+including recovery and purge. The previous permissive Node path mock concealed
+the failure; tests now reject bare paths and cover Android/iOS-shaped directories,
+reserved characters, reopen, cleanup and the old pre-capture `creating` intent.
+This reproduces the reported startup error without treating synthetic cipher
+capability as physical-device proof. A rebuilt APK still requires device acceptance.
+
 Tests use actual SQLite for rollback, reopened loss counters and persistent-file
 cleanup, with injected native boundaries. A synthetic cipher capability in
 those tests does not validate SQLCipher. Native keychain/keystore protection,
