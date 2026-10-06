@@ -3,8 +3,10 @@ import { AudioBufferJournal, type BufferRecord } from '../audioBufferJournal';
 const digest = async (value: string) => createHash('sha256').update(value).digest('hex');
 function fixture() {
   let value: string | null = null;
+  let losses: string | null = null;
   const io = { read: jest.fn(async () => value), write: jest.fn(async (next: string) => { value = next; }) };
-  return { journal: new AudioBufferJournal(io, digest), io, set: (v: string) => { value = v; }, value: () => value };
+  const lossIo = { read: jest.fn(async () => losses), write: jest.fn(async (next: string) => { losses = next; }) };
+  return { journal: new AudioBufferJournal(io, digest, lossIo), io, lossIo, set: (v: string) => { value = v; }, value: () => value };
 }
 async function record(journal: AudioBufferJournal, sessionId = 'SES-one'): Promise<BufferRecord> {
   const ownerHash = 'a'.repeat(64);
@@ -89,4 +91,50 @@ test('native storage diagnostics cannot leak into user-visible errors', async ()
   const f = fixture(); const row = await record(f.journal); const lease = f.journal.acquire(row.id)!;
   f.io.write.mockRejectedValueOnce(new Error('PRIVATE_KEY_AND_NATIVE_PATH'));
   await expect(f.journal.edit(row.id, lease, () => row)).rejects.toThrow('Ses tamponu dizini doğrulanamadı');
+});
+
+test.each(['archive-write', 'archive-readback', 'journal-write', 'journal-readback'] as const)(
+  'loss transfer survives %s failure without a gap in finish protection', async failure => {
+    const f = fixture(); const row = { ...await record(f.journal), state: 'lost' as const };
+    const lease = f.journal.acquire(row.id)!;
+    await f.journal.edit(row.id, lease, () => row);
+    if (failure === 'archive-write') f.lossIo.write.mockRejectedValueOnce(new Error('locked'));
+    if (failure === 'archive-readback') f.lossIo.read.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error('locked'));
+    if (failure === 'journal-write') f.io.write.mockRejectedValueOnce(new Error('locked'));
+    if (failure === 'journal-readback') f.io.read.mockResolvedValueOnce(f.value()).mockRejectedValueOnce(new Error('locked'));
+    await expect(f.journal.archiveLost(row, lease)).rejects.toThrow();
+    const restarted = new AudioBufferJournal(f.io, digest, f.lossIo);
+    await expect(restarted.assertFinishAllowed(row.ownerHash, row.sessionId)).rejects.toThrow('Bekleyen');
+    await f.journal.archiveLost(row, lease);
+    expect(await restarted.list()).toEqual([]);
+    expect(await restarted.hasLoss(row.ownerHash, row.sessionId)).toBe(true);
+    await expect(f.journal.edit(row.id, lease, () => ({ ...row, state: 'creating' }))).rejects.toThrow();
+    await f.journal.forgetLoss(row.id, lease);
+    expect(await restarted.hasLoss(row.ownerHash, row.sessionId)).toBe(false);
+  },
+);
+
+test('archived history is bounded and never evicted to admit another loss marker', async () => {
+  const f = fixture();
+  for (let i = 0; i < 20; i++) {
+    const row = { ...await record(f.journal, `SES-history-${i}`), state: 'lost' as const };
+    const lease = f.journal.acquire(row.id)!;
+    await f.journal.edit(row.id, lease, () => row); await f.journal.archiveLost(row, lease);
+    f.journal.release(row.id, lease);
+  }
+  expect(await f.journal.lossHistory()).toHaveLength(20);
+  await expect(f.journal.assertCapacity()).rejects.toThrow('AUDIO_HISTORY_CAPACITY');
+  const row = { ...await record(f.journal, 'SES-extra'), state: 'lost' as const };
+  const lease = f.journal.acquire(row.id)!;
+  await f.journal.edit(row.id, lease, () => row);
+  await expect(f.journal.archiveLost(row, lease)).rejects.toThrow('AUDIO_HISTORY_CAPACITY');
+  expect(await f.journal.list()).toEqual([row]);
+  expect(await f.journal.lossHistory()).toHaveLength(20);
+});
+
+test('corrupt history cannot become absent loss evidence', async () => {
+  const f = fixture(); const row = await record(f.journal);
+  f.lossIo.read.mockResolvedValue('{broken');
+  await expect(f.journal.assertFinishAllowed(row.ownerHash, row.sessionId)).rejects.toThrow();
+  await expect(f.journal.assertCapacity()).rejects.toThrow();
 });

@@ -11,8 +11,10 @@ An encrypted per-session database alone is not a recovery mechanism: after
 process death there was no discoverable list, expired empty queues forgot loss,
 and lifecycle retry could finish the gateway session before pending PCM replay.
 
-Use one encrypted SecureStore metadata journal (max four entries, max 2048 UTF-8
-bytes). No PCM, transcript or token appears in it. Identity is the SHA-256 of
+Use an encrypted SecureStore active-buffer journal (max four entries, max 2048
+UTF-8 bytes), plus a separate encrypted loss/unverified-history key (max 20
+hashed identities, max 2048 UTF-8 bytes, grouped by owner hash). No PCM,
+transcript or token appears in either. Identity is the SHA-256 of
 the existing account/tenant owner hash plus gateway session ID. Every record
 and identity is validated before deriving a file/key name. Unknown, locked,
 corrupt or full journals fail closed; entries are never silently evicted.
@@ -35,6 +37,17 @@ reopening. Loss cleanup removes audio/key but retains a `lost` tombstone;
 `deleting` preserves whether cleanup follows loss or validated drain. Metadata
 survives failed close, key deletion, file deletion or verification writes.
 
+After native close and verified removal of the original file, all sidecars and
+key, cleanup copies loss/unverified evidence to the separate history and reads
+it back before removing the active entry. A crash at either write leaves one
+or both copies; retries are idempotent and canonical finish checks both under
+the same serialized journal lock. Old v1 `lost` records migrate only after the
+same file/key absence checks. Unexpired nonempty PCM and leased handles remain
+in their original slots. A closed empty queue without drain proof can release
+its file/key but archives UNVERIFIED evidence, never a successful finish.
+Explicit server-acknowledged abandonment or owner logout can forget history;
+an ordinary 404 cannot. History bounds never silently evict evidence.
+
 An empty queue alone never permits success cleanup. Only validated transport
 `drained` plus no pending/lost chunks can seal the buffer and persist `drained`.
 The queue checks, seal and journal transition run under the same lease and
@@ -44,8 +57,8 @@ still do not prove final transcript/analysis persistence.
 
 ## Cleanup execution and alternatives
 
-Closed-buffer expiry runs at app-root mount, foreground and a one-minute
-timer while the app is active. It uses the ORIGINAL configured retention;
+Closed-buffer expiry runs at app-root mount, foreground, before capture admission
+and on a one-minute timer while the app is active. It uses the ORIGINAL retention;
 restart does not extend deadlines. Active handles retain their expiry timer.
 Cold replay is not implemented by this delta. Logout deletes every discoverable
 buffer belonging to the signed-in account before the local session is cleared;
@@ -101,6 +114,26 @@ native exception text, SQL, paths and keys remain excluded. This removes the
 ambiguous error and prevents new remote sessions on known local capacity
 failure; it does not constitute device acceptance or automatic recovery of
 the previous recordings. The four-entry/2048-byte bound is unchanged.
+
+The subsequent device `AUDIO_CAPACITY` report confirms capacity exhaustion.
+Its closure retry returns 404; this does not identify which missing route or
+session caused it and does not grant successful closure. The prior single
+journal design kept cleaned tombstones in all four audio slots. Increasing
+audio retention/capacity or evicting history would hide that design problem.
+We chose the separate bounded metadata history above, retaining both loss
+protection and the existing active-audio limits. Capture admission runs cleanup
+first; a failed old cleanup keeps its own slot reserved, while independently
+verified free slots remain usable. If cleanup/history reads cannot establish
+available capacity, capture still fails closed. The remaining 20-entry closure
+history limit must be resolved through actual server reconciliation, not eviction.
+
+Tests cover migration of four legacy tombstones, original-TTL expiry, a fifth
+capture, preservation of unexpired PCM, archive/main write and readback failures,
+restart protection, no gap in HTTP-finish denial, owner isolation/logout, bounded
+history and explicit abandonment even at the history limit. The capacity panel
+no longer suggests that selecting a different meeting bypasses a full store.
+Native device acceptance remains required; server PR1201 is still open and the
+backend main branch lacks the new gateway abandonment route at this check.
 
 Tests use actual SQLite for rollback, reopened loss counters and persistent-file
 cleanup, with injected native boundaries. A synthetic cipher capability in

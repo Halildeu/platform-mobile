@@ -2,7 +2,7 @@ import { begin, completeCapture, captureStopped, abandonRecording, createMeeting
 import { mobileSession } from '../../auth/mobileSession';
 import * as SecureStore from 'expo-secure-store';
 import { createHash } from 'node:crypto';
-import { BUFFER_JOURNAL_KEY } from '../nativeBufferJournal';
+import { BUFFER_JOURNAL_KEY, BUFFER_LOSS_KEY } from '../nativeBufferJournal';
 import * as nativePush from '../../notifications/nativePush';
 import { resultExporter } from '../../analysis/nativeResultExport';
 jest.mock('../../notifications/nativePush', () => ({ disableNativePush: jest.fn() }));
@@ -52,7 +52,7 @@ it.each(['creating', 'ready', 'lost', 'deleting'].flatMap(state => ['finish', 's
   const id = createHash('sha256').update(JSON.stringify([ownerHash, receipt.externalSessionId])).digest('hex');
   const journal = JSON.stringify({ version: 1, records: [{ id, ownerHash, sessionId: receipt.externalSessionId,
     retentionMs: 1000, state, ...(state === 'deleting' ? { outcome: 'lost' } : {}) }] });
-  jest.spyOn(SecureStore, 'getItemAsync').mockImplementation(async name => name === BUFFER_JOURNAL_KEY ? journal : stored);
+  jest.spyOn(SecureStore, 'getItemAsync').mockImplementation(async name => name === BUFFER_JOURNAL_KEY ? journal : name === BUFFER_LOSS_KEY ? null : stored);
   const fetchMock = jest.spyOn(global, 'fetch');
   await expect(path === 'saved' ? persistedResult(meetingId) : finish(jwt, receipt.externalSessionId)).rejects.toThrow('Bekleyen veya eksik');
   expect(fetchMock).not.toHaveBeenCalled();
@@ -600,4 +600,14 @@ describe('independent meeting recovery journal', () => {
     expect(JSON.parse(stored!).records.slice(0, 2)).toEqual(old);
     captureStopped(secondSession);
   });
+});
+
+it('archived local loss blocks canonical finish even when the active audio journal is empty', async () => {
+  const id = createHash('sha256').update(JSON.stringify([ownerHash, receipt.externalSessionId])).digest('hex');
+  jest.spyOn(SecureStore, 'getItemAsync').mockImplementation(async name => name === BUFFER_LOSS_KEY
+    ? JSON.stringify({ version: 1, owners: { [ownerHash]: [id] } }) : name === key ? stored : null);
+  const fetchMock = jest.spyOn(global, 'fetch');
+  await expect(finish(jwt, receipt.externalSessionId)).rejects.toThrow('Bekleyen veya eksik');
+  expect(fetchMock).not.toHaveBeenCalled();
+  expect(stored).toBe(JSON.stringify(receipt));
 });

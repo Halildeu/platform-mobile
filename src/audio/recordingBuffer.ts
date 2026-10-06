@@ -1,14 +1,16 @@
 import { OfflineAudioBuffer } from './offlineBuffer';
 import { BufferStorageError } from './bufferFailure';
-import { bufferJournal } from './nativeBufferJournal';
+import { bufferJournal, sweepAudioBuffers } from './nativeBufferJournal';
 
-/** Check local admission before creating another remote recording/session. Never discards entries. */
-export async function prepareRecordingStorage(retentionMs: unknown): Promise<void> {
+/** Apply original cleanup policy and check local admission before allocating a remote session. */
+export async function prepareRecordingStorage(retentionMs: unknown, sweep = sweepAudioBuffers): Promise<void> {
   if (retentionMs === undefined || retentionMs === null) return;
   if (typeof retentionMs !== 'number' || !Number.isSafeInteger(retentionMs) || retentionMs <= 0) {
     throw new Error('Ses saklama süresi geçersiz; kayıt başlatılmadı.');
   }
   try {
+    // Cleanup failure leaves its entry reserved. Other verified-free slots can still be used.
+    await sweep().catch(() => {});
     await bufferJournal.assertCapacity();
   } catch (error) {
     throw error instanceof BufferStorageError ? error : new BufferStorageError('AUDIO_JOURNAL');

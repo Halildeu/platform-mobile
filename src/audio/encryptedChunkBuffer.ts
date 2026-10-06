@@ -41,13 +41,16 @@ function unlock(db: SQLite.SQLiteDatabase, key: string) {
 }
 
 /** Must hold a lease with a successfully closed DB before removing any key/file. */
-async function eraseFiles(record: BufferRecord, lease: symbol): Promise<void> {
+async function eraseFiles(record: BufferRecord, lease: symbol, archiveLoss: boolean): Promise<void> {
   // Final journal removal may have committed before its verification read failed.
-  if (!(await bufferJournal.list()).some(row => row.id === record.id) && record.state === 'drained' &&
+  if (!(await bufferJournal.list()).some(row => row.id === record.id) &&
+      (record.state === 'drained' || await bufferJournal.hasLoss(record.ownerHash, record.sessionId)) &&
       !anyFileExists(record.id) && await SecureStore.getItemAsync(keyName(record.id)) === null) return;
+  let lossCleanup = false;
   await bufferJournal.edit(record.id, lease, row => {
     if (!row || !['lost', 'drained', 'deleting'].includes(row.state)) throw new Error('Ses kaydı silinmeye hazır değil.');
     const outcome = row.state === 'deleting' ? row.outcome! : row.state as 'lost' | 'drained';
+    lossCleanup = outcome === 'lost';
     return { ...row, state: 'deleting', outcome };
   });
   await SecureStore.deleteItemAsync(keyName(record.id));
@@ -61,9 +64,10 @@ async function eraseFiles(record: BufferRecord, lease: symbol): Promise<void> {
     const { outcome: _outcome, ...rest } = row;
     return { ...rest, state: 'lost' }; // Empty/lost is NOT successful delivery.
   });
+  if (lossCleanup && archiveLoss) await bufferJournal.archiveLost(record, lease);
 }
-async function erase(record: BufferRecord, lease: symbol): Promise<void> {
-  try { await eraseFiles(record, lease); } catch { throw storageFailure(); }
+async function erase(record: BufferRecord, lease: symbol, archiveLoss = true): Promise<void> {
+  try { await eraseFiles(record, lease, archiveLoss); } catch { throw storageFailure(); }
 }
 
 type BufferOptions = {
@@ -224,10 +228,11 @@ export async function discardAbandonedBuffer(ownerHash: string, sessionId: strin
   if (!lease) throw storageFailure();
   try {
     const record = (await bufferJournal.list()).find(row => row.id === id);
-    if (!record) return;
+    if (!record) { await bufferJournal.forgetLoss(id, lease); return; }
     await bufferJournal.edit(id, lease, row => row ? { ...row, state: 'lost', outcome: undefined } : undefined);
-    await erase({ ...record, state: 'lost' }, lease);
+    await erase({ ...record, state: 'lost' }, lease, false);
     await bufferJournal.edit(id, lease, () => undefined);
+    await bufferJournal.forgetLoss(id, lease);
   } catch { throw storageFailure(); }
   finally { bufferJournal.release(id, lease); }
 }
@@ -235,7 +240,14 @@ export async function discardAbandonedBuffer(ownerHash: string, sessionId: strin
 export async function discardOwnerAudioBuffers(ownerHash: string): Promise<boolean> {
   const records = (await bufferJournal.list()).filter(row => row.ownerHash === ownerHash);
   for (const record of records) await discardAbandonedBuffer(ownerHash, record.sessionId);
-  return !(await bufferJournal.list()).some(row => row.ownerHash === ownerHash);
+  for (const record of (await bufferJournal.lossHistory()).filter(row => row.ownerHash === ownerHash)) {
+    const lease = bufferJournal.acquire(record.id);
+    if (!lease) throw storageFailure();
+    try { await bufferJournal.forgetLoss(record.id, lease); }
+    finally { bufferJournal.release(record.id, lease); }
+  }
+  return !(await bufferJournal.list()).some(row => row.ownerHash === ownerHash) &&
+    !(await bufferJournal.lossHistory()).some(row => row.ownerHash === ownerHash);
 }
 
 /** Runs on next app execution/foreground, not while the OS has terminated the process. */
@@ -255,7 +267,9 @@ export async function sweepEncryptedChunkBuffers(): Promise<void> {
     try {
       const record = (await bufferJournal.list()).find(row => row.id === candidate.id);
       if (!record) continue;
-      if (record.state === 'lost' && !anyFileExists(record.id) && await SecureStore.getItemAsync(keyName(record.id)) === null) continue;
+      if (record.state === 'lost' && !anyFileExists(record.id) && await SecureStore.getItemAsync(keyName(record.id)) === null) {
+        await bufferJournal.archiveLost(record, lease); continue;
+      }
       if (record.state === 'creating') {
         await bufferJournal.edit(record.id, lease, row => ({ ...row!, state: 'lost' }));
         await erase(record, lease);
@@ -278,12 +292,14 @@ export async function sweepEncryptedChunkBuffers(): Promise<void> {
       };
       const buffer = new OfflineAudioBuffer({ store: new SqliteChunkStore(adapter, 'existing'), ttlMs: record.retentionMs });
       buffer.purgeExpired();
-      const lost = buffer.purged() > 0 || buffer.dropped() > 0;
+      // A closed, empty queue has no audio to retain. Keep an UNVERIFIED/loss marker,
+      // never infer drain proof from emptiness (including pre-microphone failures).
+      const lost = buffer.purged() > 0 || buffer.dropped() > 0 || buffer.pending() === 0;
       db.closeSync(); db = undefined;
       if (lost) {
         await bufferJournal.edit(record.id, lease, row => ({ ...row!, state: 'lost' }));
         await erase(record, lease);
-      } // An empty but undrained ready buffer remains recoverable, never auto-finished.
+      } // Nonempty unexpired audio remains recoverable; nothing here auto-finishes it.
     } catch { failed = true; }
     finally {
       try { close(); } catch { failedOpens.set(candidate.id, close); failed = true; }

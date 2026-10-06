@@ -78,3 +78,11 @@ test('leaving during native release cancels the old separate-meeting confirmatio
   await act(async () => released());
   expect(separate).not.toHaveBeenCalled();
 });
+
+test('storage capacity warning never suggests that another meeting bypasses the block', async () => {
+  const screen = render(<PendingRecordingPanel meetingId="new-meeting" storageBlocked onSeparateMeeting={async () => {}} beforeResolve={async () => {}} />);
+  await waitFor(() => expect(screen.getByText(/Yeni kayıt başlamadan ses depolama sorunu çözülmeli/)).toBeTruthy());
+  expect(screen.queryByText(/Seçili toplantıda Konuşma testini başlat/)).toBeNull();
+  expect(screen.queryByText('Önceki kaydı koru, yeni toplantı aç')).toBeNull();
+  expect(api.finish).not.toHaveBeenCalled(); expect(api.abandonRecording).not.toHaveBeenCalled();
+});

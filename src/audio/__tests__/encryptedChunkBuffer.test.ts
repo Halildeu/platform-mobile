@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, dirname, basename } from 'node:path';
 import * as SQLite from 'expo-sqlite';
 import * as SecureStore from 'expo-secure-store';
-import { bufferJournal, BUFFER_JOURNAL_KEY } from '../nativeBufferJournal';
+import { bufferJournal, BUFFER_JOURNAL_KEY, BUFFER_LOSS_KEY } from '../nativeBufferJournal';
 import { discardAbandonedBuffer, discardOwnerAudioBuffers, openEncryptedChunkBuffer, reopenEncryptedChunkBuffer, sweepEncryptedChunkBuffers } from '../encryptedChunkBuffer';
 import { replayPendingAudio } from '../pendingAudioReplay';
 import type { LiveSocket } from '../foregroundStream';
@@ -41,6 +41,12 @@ const pcm = { chunkSeq: 0, capturedAtMs: 1, pcm16: new Uint8Array([1, 2]) };
 const identity = (sessionId: string) => createHash('sha256').update(JSON.stringify([ownerScope, sessionId])).digest('hex');
 const file = (sessionId: string) => join(directory, `audio-${identity(sessionId)}.db`);
 const key = (sessionId: string) => `audio-buffer-${identity(sessionId)}`;
+async function expectLoss(sessionId: string) {
+  const active = (await bufferJournal.list()).find(row => row.sessionId === sessionId);
+  expect(active?.state === 'lost' || await bufferJournal.hasLoss(ownerScope, sessionId)).toBe(true);
+  await expect(bufferJournal.assertFinishAllowed(ownerScope, sessionId)).rejects.toThrow('Bekleyen');
+}
+
 
 beforeEach(() => {
   jest.useFakeTimers(); jest.resetAllMocks(); handles = []; stored = new Map();
@@ -121,7 +127,7 @@ test('unacknowledged close is retryable and startup sweep respects original TTL'
   await sweepEncryptedChunkBuffers();
   expect(existsSync(file(opts.sessionId))).toBe(false);
   expect(stored.has(key(opts.sessionId))).toBe(false);
-  expect((await bufferJournal.list())[0].state).toBe('lost');
+  await expectLoss(opts.sessionId);
   await expect(bufferJournal.assertFinishAllowed(ownerScope, opts.sessionId)).rejects.toThrow('Bekleyen');
   const writes = jest.mocked(SecureStore.setItemAsync).mock.calls.length;
   await sweepEncryptedChunkBuffers();
@@ -138,13 +144,14 @@ test('TTL-empty release retains loss tombstone even after failed cleanup', async
   jest.mocked(SecureStore.deleteItemAsync).mockRejectedValueOnce(new Error('locked'));
   await expect(handle.release()).rejects.toThrow('doğrulanamadı');
   await expect(handle.release()).resolves.toBe('lost');
-  expect((await bufferJournal.list())[0].state).toBe('lost');
+  await expectLoss(opts.sessionId);
 });
 
-test('zero pending without drained remains ready and cannot finalize HTTP', async () => {
+test('closed zero-pending without drain archives unverified history and cannot finalize HTTP', async () => {
   const opts = options(); const handle = await openEncryptedChunkBuffer(opts);
   handle.close(); await sweepEncryptedChunkBuffers();
-  expect((await bufferJournal.list())[0].state).toBe('ready');
+  expect(await bufferJournal.list()).toEqual([]);
+  expect(await bufferJournal.hasLoss(ownerScope, opts.sessionId)).toBe(true);
   await expect(bufferJournal.assertFinishAllowed(ownerScope, opts.sessionId)).rejects.toThrow('Bekleyen');
 });
 
@@ -169,7 +176,7 @@ test('missing original file never creates a blank replacement', async () => {
   const opens = jest.mocked(SQLite.openDatabaseSync).mock.calls.length;
   await sweepEncryptedChunkBuffers();
   expect(SQLite.openDatabaseSync).toHaveBeenCalledTimes(opens);
-  expect((await bufferJournal.list())[0].state).toBe('lost');
+  await expectLoss(opts.sessionId);
 });
 
 test('missing key never generates a replacement; orphan audio is removed with loss evidence', async () => {
@@ -178,7 +185,7 @@ test('missing key never generates a replacement; orphan audio is removed with lo
   await sweepEncryptedChunkBuffers();
   expect(SQLite.openDatabaseSync).toHaveBeenCalledTimes(1);
   expect(existsSync(file(opts.sessionId))).toBe(false);
-  expect((await bufferJournal.list())[0].state).toBe('lost');
+  await expectLoss(opts.sessionId);
 });
 
 test('creating intent survives key write failure and is cleaned on next execution', async () => {
@@ -191,7 +198,7 @@ test('creating intent survives key write failure and is cleaned on next executio
   expect((await bufferJournal.list())[0].state).toBe('creating');
   expect(SQLite.openDatabaseSync).not.toHaveBeenCalled();
   await sweepEncryptedChunkBuffers();
-  expect((await bufferJournal.list())[0].state).toBe('lost');
+  await expectLoss(opts.sessionId);
 });
 
 test('pre-microphone URI failure from the previous APK can be cleaned without inventing delivery', async () => {
@@ -202,7 +209,7 @@ test('pre-microphone URI failure from the previous APK can be cleaned without in
   }] }));
   await sweepEncryptedChunkBuffers();
   expect(SQLite.openDatabaseSync).not.toHaveBeenCalled();
-  expect((await bufferJournal.list())[0].state).toBe('lost');
+  await expectLoss(opts.sessionId);
   await expect(bufferJournal.assertFinishAllowed(ownerScope, opts.sessionId)).rejects.toThrow('Bekleyen');
   // The normal explicit-abandon flow calls this only after server acknowledgements.
   await discardAbandonedBuffer(ownerScope, opts.sessionId);
@@ -216,7 +223,7 @@ test('unexpected old file is never overwritten or interpreted as an empty queue'
   const opts = options(); writeFileSync(file(opts.sessionId), 'legacy encrypted bytes');
   await expect(openEncryptedChunkBuffer(opts)).rejects.toThrow('doğrulanamadı');
   expect(SQLite.openDatabaseSync).not.toHaveBeenCalled();
-  expect((await bufferJournal.list())[0].state).toBe('lost');
+  await expectLoss(opts.sessionId);
   await sweepEncryptedChunkBuffers();
 });
 
@@ -268,7 +275,7 @@ test('a corrupt first database does not starve other expired session cleanup', a
   await expect(sweepEncryptedChunkBuffers()).rejects.toThrow('Bazı');
   expect(existsSync(file(first.sessionId))).toBe(true); // do not discard unverified state
   expect(existsSync(file(second.sessionId))).toBe(false);
-  expect((await bufferJournal.list()).find(r => r.sessionId === second.sessionId)?.state).toBe('lost');
+  await expectLoss(second.sessionId);
 });
 
 test('auxiliary SQLite files are removed after confirmed close; loss evidence survives', async () => {
@@ -278,7 +285,7 @@ test('auxiliary SQLite files are removed after confirmed close; loss evidence su
   for (const suffix of ['-wal', '-shm', '-journal']) writeFileSync(file(opts.sessionId) + suffix, 'orphan bytes');
   await sweepEncryptedChunkBuffers();
   for (const suffix of ['', '-wal', '-shm', '-journal']) expect(existsSync(file(opts.sessionId) + suffix)).toBe(false);
-  expect((await bufferJournal.list())[0].state).toBe('lost');
+  await expectLoss(opts.sessionId);
 });
 
 test('lost tombstone publication failure cannot erase files or admit HTTP finish', async () => {
@@ -307,19 +314,19 @@ test('native SQL/key error text is never returned to the screen', async () => {
 
 test('four retained records reject a fifth with a capacity code, without opening a DB or overwriting keys', async () => {
   for (let i = 0; i < 4; i++) {
-    const handle = await openEncryptedChunkBuffer(options()); handle.close();
+    const handle = await openEncryptedChunkBuffer(options()); handle.buffer.enqueue(pcm); handle.close();
   }
   const before = new Map(stored);
   const opens = jest.mocked(SQLite.openDatabaseSync).mock.calls.length;
-  await expect(prepareRecordingStorage(900000)).rejects.toThrow('AUDIO_CAPACITY');
+  await expect(prepareRecordingStorage(900000, sweepEncryptedChunkBuffers)).rejects.toThrow('AUDIO_CAPACITY');
   await expect(openEncryptedChunkBuffer(options())).rejects.toThrow('AUDIO_CAPACITY');
   expect(stored).toEqual(before);
-  expect(SQLite.openDatabaseSync).toHaveBeenCalledTimes(opens);
+  expect(SQLite.openDatabaseSync).toHaveBeenCalledTimes(opens + 4); // cleanup reopens originals, never a fifth file
 });
 
 test('preflight journal access failure never exposes native error details', async () => {
-  jest.mocked(SecureStore.getItemAsync).mockRejectedValueOnce(new Error('PRIVATE_KEY_PATH'));
-  const error = await prepareRecordingStorage(900000).catch(e => e);
+  jest.mocked(SecureStore.getItemAsync).mockRejectedValue(new Error('PRIVATE_KEY_PATH'));
+  const error = await prepareRecordingStorage(900000, sweepEncryptedChunkBuffers).catch(e => e);
   expect(error.message).toContain('AUDIO_JOURNAL');
   expect(error.message).not.toContain('PRIVATE_KEY_PATH');
   expect(SQLite.openDatabaseSync).not.toHaveBeenCalled();
@@ -362,7 +369,7 @@ test('reopen preserves original identity, bytes, timestamps and TTL and disallow
   reopened.close();
   jest.setSystemTime(Number(row!.enqueued_at_ms) + 1001);
   await expect(reopenEncryptedChunkBuffer({ ownerScope, sessionId: opts.sessionId, maxChunks: 2 })).rejects.toThrow('doğrulanamadı');
-  expect((await bufferJournal.list())[0].state).toBe('lost');
+  await expectLoss(opts.sessionId);
   await sweepEncryptedChunkBuffers(); expect(existsSync(file(opts.sessionId))).toBe(false);
 });
 
@@ -430,7 +437,8 @@ test('recovered gateway drain cannot grant canonical finish, even after reopen a
   ws.onmessage?.({ data: '{"type":"drained"}' });
   expect(await attempt.result).toEqual({ state: 'gateway-drained', historyComplete: false });
   expect(recovered.buffer.pending()).toBe(0); recovered.close(); await sweepEncryptedChunkBuffers();
-  expect((await bufferJournal.list())[0].state).toBe('ready');
+  expect(await bufferJournal.list()).toEqual([]);
+  expect(await bufferJournal.hasLoss(ownerScope, opts.sessionId)).toBe(true);
   await expect(bufferJournal.assertFinishAllowed(ownerScope, opts.sessionId)).rejects.toThrow('Bekleyen');
 });
 
@@ -464,4 +472,73 @@ test('logout cleanup erases every retained buffer for the signed-in owner', asyn
   expect(existsSync(file(first.sessionId))).toBe(false);
   expect(existsSync(file(second.sessionId))).toBe(false);
   expect(await bufferJournal.list()).toEqual([]);
+});
+
+test('legacy four lost tombstones migrate before startup; a fifth recording opens and all old finishes remain blocked', async () => {
+  const old = Array.from({ length: 4 }, () => options());
+  stored.set(BUFFER_JOURNAL_KEY, JSON.stringify({ version: 1, records: old.map(o => ({
+    id: identity(o.sessionId), ownerHash: ownerScope, sessionId: o.sessionId, retentionMs: o.retentionMs, state: 'lost',
+  })) }));
+  await prepareRecordingStorage(900000, sweepEncryptedChunkBuffers);
+  expect(await bufferJournal.list()).toEqual([]);
+  expect(await bufferJournal.lossHistory()).toHaveLength(4);
+  for (const o of old) await expect(bufferJournal.assertFinishAllowed(ownerScope, o.sessionId)).rejects.toThrow('Bekleyen');
+  const next = await openEncryptedChunkBuffer(options());
+  next.buffer.enqueue(pcm);
+  expect(next.buffer.pending()).toBe(1);
+  next.close();
+  expect(await bufferJournal.lossHistory()).toHaveLength(4);
+});
+
+test('four expired buffers release capture slots without losing loss evidence', async () => {
+  const old = Array.from({ length: 4 }, () => options());
+  for (const o of old) { const handle = await openEncryptedChunkBuffer(o); handle.buffer.enqueue(pcm); handle.close(); }
+  jest.setSystemTime(Date.now() + 1001);
+  await prepareRecordingStorage(900000, sweepEncryptedChunkBuffers);
+  expect(await bufferJournal.list()).toEqual([]);
+  for (const o of old) {
+    expect(existsSync(file(o.sessionId))).toBe(false);
+    expect(stored.has(key(o.sessionId))).toBe(false);
+    expect(await bufferJournal.hasLoss(ownerScope, o.sessionId)).toBe(true);
+  }
+});
+
+test('loss archival failure retains its reserved slot; retry frees it after durable history verification', async () => {
+  const o = options(); const handle = await openEncryptedChunkBuffer(o); handle.buffer.enqueue(pcm); handle.close();
+  jest.setSystemTime(Date.now() + 1001);
+  const write = jest.mocked(SecureStore.setItemAsync).getMockImplementation()!;
+  jest.mocked(SecureStore.setItemAsync).mockImplementation(async (name, value, config) => {
+    if (name === BUFFER_LOSS_KEY) throw new Error('locked');
+    return write(name, value, config);
+  });
+  await expect(sweepEncryptedChunkBuffers()).rejects.toThrow();
+  expect((await bufferJournal.list())[0].state).toBe('lost');
+  await expect(bufferJournal.assertFinishAllowed(ownerScope, o.sessionId)).rejects.toThrow();
+  jest.mocked(SecureStore.setItemAsync).mockImplementation(write);
+  await sweepEncryptedChunkBuffers();
+  expect(await bufferJournal.list()).toEqual([]);
+  expect(await bufferJournal.hasLoss(ownerScope, o.sessionId)).toBe(true);
+  await discardAbandonedBuffer(ownerScope, o.sessionId);
+  expect(await bufferJournal.hasLoss(ownerScope, o.sessionId)).toBe(false);
+});
+
+test('owner logout clears archived history as well as live audio, while preserving other owners', async () => {
+  const first = options(); const handle = await openEncryptedChunkBuffer(first); handle.close();
+  const other = { ...options(), ownerScope: 'b'.repeat(64) };
+  const otherHandle = await openEncryptedChunkBuffer(other); otherHandle.close();
+  await sweepEncryptedChunkBuffers();
+  expect(await bufferJournal.lossHistory()).toHaveLength(2);
+  await discardOwnerAudioBuffers(ownerScope);
+  expect(await bufferJournal.lossHistory()).toHaveLength(1);
+  expect(await bufferJournal.hasLoss(other.ownerScope, other.sessionId)).toBe(true);
+});
+
+test('explicit acknowledged abandonment can clean an active slot even when loss history is full', async () => {
+  const o = options(); const handle = await openEncryptedChunkBuffer(o); handle.buffer.enqueue(pcm); handle.close();
+  const ids = Array.from({ length: 20 }, (_, i) => identity(`SES-prior-${i}`));
+  stored.set(BUFFER_LOSS_KEY, JSON.stringify({ version: 1, owners: { [ownerScope]: ids } }));
+  await discardAbandonedBuffer(ownerScope, o.sessionId);
+  expect(await bufferJournal.list()).toEqual([]);
+  expect(await bufferJournal.lossHistory()).toHaveLength(20);
+  expect(existsSync(file(o.sessionId))).toBe(false);
 });

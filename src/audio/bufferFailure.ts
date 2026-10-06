@@ -1,4 +1,5 @@
 const descriptions = {
+  AUDIO_HISTORY_CAPACITY: 'Bu cihazda bekleyen kapanış geçmişi sınırına ulaşıldı. Geçmiş korunuyor; önce eski kayıtların kapanışı çözülmeli.',
   AUDIO_CAPACITY: 'Bu cihazda kapanışı bekleyen ses kayıtları sınırına ulaşıldı. Önceki kayıtların kapanışı çözülmeden yeni kayıt açılamaz. Kayıtlar korunuyor.',
   AUDIO_JOURNAL: 'Ses kayıt dizinine erişilemedi.',
   AUDIO_FILES: 'Ses dosyalarının durumu doğrulanamadı.',

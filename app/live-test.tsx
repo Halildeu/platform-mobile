@@ -592,7 +592,7 @@ export default function LiveTestScreen() {
   const header = <View style={{ gap: 12 }}>
     <Text style={styles.title}>Toplantı</Text>
     <Text style={styles.text}>{status}</Text>
-    {signedIn && !recording && !busy && <PendingRecordingPanel key={selected} meetingId={selected} onSeparateMeeting={openSeparateMeeting} beforeResolve={async () => {
+    {signedIn && !recording && !busy && <PendingRecordingPanel key={selected} meetingId={selected} storageBlocked={status.includes('AUDIO_CAPACITY') || status.includes('AUDIO_HISTORY_CAPACITY')} onSeparateMeeting={openSeparateMeeting} beforeResolve={async () => {
       if (audioBuffer.current) { await audioBuffer.current.release(); audioBuffer.current = null; }
     }} />}
     <Pressable accessibilityRole="button" onPress={() => setSetup(!setup)}><Text style={styles.selected}>{setup ? 'Toplantı ayarlarını gizle' : 'Toplantı seç / ayarlar'}</Text></Pressable>

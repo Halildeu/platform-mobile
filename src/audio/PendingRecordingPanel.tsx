@@ -2,8 +2,8 @@ import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, Text, View } from 'react-native';
 import * as api from './liveTestApi';
 
-export function PendingRecordingPanel({ beforeResolve, meetingId, onSeparateMeeting }: {
-  beforeResolve: () => Promise<void>; meetingId?: string; onSeparateMeeting?: () => Promise<void>;
+export function PendingRecordingPanel({ beforeResolve, meetingId, onSeparateMeeting, storageBlocked = false }: {
+  beforeResolve: () => Promise<void>; meetingId?: string; onSeparateMeeting?: () => Promise<void>; storageBlocked?: boolean;
 }) {
   const [loaded, setPending] = useState<{ meetingId?: string; value: Awaited<ReturnType<typeof api.pendingRecording>> } | null>(null);
   const pending = loaded?.meetingId === meetingId ? loaded?.value : null;
@@ -73,7 +73,9 @@ export function PendingRecordingPanel({ beforeResolve, meetingId, onSeparateMeet
   return <View style={styles.panel}>
     {pending && <>
       <Text style={styles.text}>{belongsToSelection ? 'Bekleyen kayıt' : 'Önceki toplantının bekleyen kaydı'}</Text>
-      <Text style={styles.text}>{!belongsToSelection
+      <Text style={styles.text}>{storageBlocked
+        ? 'Önceki kaydın kapanış bilgisi korunuyor. Yeni kayıt başlamadan ses depolama sorunu çözülmeli.'
+        : !belongsToSelection
         ? 'Önceki toplantının kapanış bilgisi korunuyor. Seçili toplantıda Konuşma testini başlat düğmesini kullanabilirsiniz.'
         : pending.incomplete
         ? 'Bu kaydın eksiksiz kapanışı doğrulanmadı. Kapanış bilgisini koruyarak ayrı bir toplantı açabilirsiniz.'
@@ -81,7 +83,7 @@ export function PendingRecordingPanel({ beforeResolve, meetingId, onSeparateMeet
       {(!pending.incomplete || pending.abandoning) && <Pressable accessibilityRole="button" disabled={busy} onPress={() => void resolve(pending.abandoning)}>
         <Text style={styles.link}>{busy ? 'Kontrol ediliyor…' : 'Kapanışı tekrar kontrol et'}</Text>
       </Pressable>}
-      {onSeparateMeeting && belongsToSelection && <Pressable accessibilityRole="button" disabled={busy} onPress={confirmSeparateMeeting}>
+      {onSeparateMeeting && belongsToSelection && !storageBlocked && <Pressable accessibilityRole="button" disabled={busy} onPress={confirmSeparateMeeting}>
         <Text style={styles.link}>Önceki kaydı koru, yeni toplantı aç</Text>
       </Pressable>}
       {pending.incomplete && !pending.abandoning && <Pressable accessibilityRole="button" disabled={busy} onPress={confirmAbandon}>

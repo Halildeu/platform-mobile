@@ -170,14 +170,15 @@ export async function logout(): Promise<boolean> {
   const pushCleared = await disableNativePush().catch(() => false);
   const audioCleared = session
     ? await clearAudioBuffersForLogout(session.jwt).catch(() => false)
-    : await bufferJournal.list().then(records => records.length === 0).catch(() => false);
+    : await Promise.all([bufferJournal.list(), bufferJournal.lossHistory()]).then(([records, history]) => !records.length && !history.length).catch(() => false);
   const sessionCleared = await mobileSession.logout();
   return pushCleared && audioCleared && sessionCleared;
 }
 
 async function clearAudioBuffersForLogout(jwt: string): Promise<boolean> {
   const ownerHash = await lifecycleOwner(jwt);
-  if (!(await bufferJournal.list()).some(row => row.ownerHash === ownerHash)) return true;
+  if (!(await bufferJournal.list()).some(row => row.ownerHash === ownerHash) &&
+      !(await bufferJournal.lossHistory()).some(row => row.ownerHash === ownerHash)) return true;
   const { discardOwnerAudioBuffers } = await import('./encryptedChunkBuffer');
   return discardOwnerAudioBuffers(ownerHash);
 }
@@ -226,6 +227,7 @@ async function request(path: string, jwt: string, body?: object, key?: string, m
       : path.endsWith('/processing-status') ? 'Kayıt durumu'
         : path.endsWith('/sessions') && path.startsWith('/api/v1/admin/meetings/') ? 'Toplantı kayıtları'
       : path.endsWith('/consents') ? 'Kayıt onayı'
+          : path.endsWith('/abandon') ? 'Eksik kayıt kapanışı'
         : path.endsWith('/finish') ? 'Kayıt kapanışı'
           : path.endsWith('/speaker-labels') ? 'Konuşmacı adı'
             : path.endsWith('/intelligence/result') ? 'Kalıcı toplantı sonucu'
@@ -455,7 +457,8 @@ export function abandonRecording(jwt: string, sessionId: string): Promise<void> 
     if (response !== ABSENT_GATEWAY_RECEIPT && (!response || response.sessionId !== sessionId || response.finalState !== 'ABANDONED'
       || !Number.isSafeInteger(response.finishedAtMs) || (response.finishedAtMs as number) < Date.parse(pending.startedAt)
       || typeof response.alreadyFinished !== 'boolean')) throw new Error('Ses oturumunun eksik kapanışı doğrulanamadı.');
-    if ((await bufferJournal.list()).some(row => row.ownerHash === pending!.ownerHash && row.sessionId === sessionId)) {
+    if ((await bufferJournal.list()).some(row => row.ownerHash === pending!.ownerHash && row.sessionId === sessionId) ||
+        await bufferJournal.hasLoss(pending.ownerHash, sessionId)) {
       const { discardAbandonedBuffer } = await import('./encryptedChunkBuffer');
       await discardAbandonedBuffer(pending.ownerHash, sessionId);
     }
