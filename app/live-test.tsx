@@ -1,3 +1,4 @@
+import { liveResumeQuery } from '../src/audio/liveResume';
 import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { Alert, AppState, Linking, Platform, Pressable, ScrollView, Share, StyleSheet, Switch, Text, View } from 'react-native';
 import * as Crypto from 'expo-crypto';
@@ -521,7 +522,7 @@ export default function LiveTestScreen() {
         onStatus: (message) => { if (generation.current === run) { setAnalysisStatus(message); setDiagnostics((previous) => [...previous, `${new Date().toISOString()} | Analiz: ${message}`].filter((_, index, all) => index < 3 || index >= all.length - 297)); } },
       });
       const NativeWebSocket = WebSocket as unknown as new (url: string, protocols: string[] | undefined, options: { headers: Record<string, string> }) => LiveSocket;
-      const socket = new NativeWebSocket(`${api.BASE_URL.replace('https:', 'wss:')}/api/v1/audio-gateway/sessions/${encodeURIComponent(id)}/stream`, undefined,
+      const socket = new NativeWebSocket(`${api.BASE_URL.replace('https:', 'wss:')}/api/v1/audio-gateway/sessions/${encodeURIComponent(id)}/stream${liveResumeQuery()}`, undefined,
         { headers: { Authorization: `Bearer ${token.current.jwt}` } });
       live.current = new ForegroundStream(socket as unknown as LiveSocket, () => {
         if (generation.current !== run || !active.current) return;
@@ -558,7 +559,7 @@ export default function LiveTestScreen() {
         if (generation.current !== run) return;
         if (line.final) record('transcript', { runId: currentRun.current, connection: line.connectionId, seq: line.seq, characters: line.text.length, periods: (line.text.match(/\./g) ?? []).length, questions: (line.text.match(/\?/g) ?? []).length, speakerTurns: line.speakerAttribution?.turns.length ?? 0 });
         setLines((previous) => applyTranscriptEvent({ lines: previous }, line.final
-          ? { type: 'final', connectionId: line.connectionId, seq: line.seq, text: line.text, speakerAttribution: line.speakerAttribution }
+          ? { type: 'final', connectionId: line.connectionId, sourceContinued: line.sourceContinued, seq: line.seq, text: line.text, speakerAttribution: line.speakerAttribution }
           : { type: 'partial', connectionId: line.connectionId, seq: line.seq, confirmed: line.confirmed ?? '', tentative: line.tentative ?? line.text }).lines);
       }, (message) => { if (generation.current !== run) return; record('capture_failed', { runId: currentRun.current }); log(`Ses bağlantısı hatası: ${message}`); failure.current = message; setStatus(message); void stopRef.current('Ses aktarımı veya WebSocket hatası'); },
       preparedBuffer.buffer, {
@@ -567,11 +568,11 @@ export default function LiveTestScreen() {
           record('transcript_connection_closed', { runId: currentRun.current, connection: connectionId });
           setLines(previous => applyTranscriptEvent({ lines: previous }, { type: 'connection_interrupted', connectionId }).lines);
         },
-        connect: async () => {
+        connect: async (cursor) => {
           const refreshed = await api.validSession(30000);
           if (generation.current !== run) throw new Error('Kayıt kapandı.');
           token.current = refreshed;
-          return new NativeWebSocket(`${api.BASE_URL.replace('https:', 'wss:')}/api/v1/audio-gateway/sessions/${encodeURIComponent(id)}/stream`, undefined,
+          return new NativeWebSocket(`${api.BASE_URL.replace('https:', 'wss:')}/api/v1/audio-gateway/sessions/${encodeURIComponent(id)}/stream${liveResumeQuery(cursor)}`, undefined,
             { headers: { Authorization: `Bearer ${refreshed.jwt}` } });
         },
         onStatus: (message) => {

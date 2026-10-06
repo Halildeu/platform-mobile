@@ -1,11 +1,14 @@
+import { LIVE_RESUME_PROTOCOL, type LiveResumeCursor } from './liveResume';
 import { encodeGatewayLivePcm16Frame } from './gatewayFrame';
 import { OfflineAudioBuffer } from './offlineBuffer';
 import { serverFailureCode, type ServerFailureCode } from './serverFailure';
 import { readSpeakerAttribution, type SpeakerAttribution } from '../transcript/speakerAttribution';
 
 export interface LiveText {
-  /** Client-local socket generation within this recording; never a provider source epoch. */
+  /** Stable source generation when resume is verified; otherwise the physical socket generation. */
   connectionId?: number;
+  /** Locally verified same-provider epoch; never copied from a transcript frame. */
+  sourceContinued?: boolean;
   seq: number; text: string; final: boolean; confirmed?: string; tentative?: string;
   speakerAttribution?: SpeakerAttribution; sourceStartSample?: number; sourceEndSample?: number;
 }
@@ -41,6 +44,11 @@ export class ForegroundStream {
   private connectionGeneration = 0;
   private retries = 0;
   private continuityLost = false;
+  private sourceEpoch: string | undefined;
+  private sourceConnectionId = 0;
+  private lastFinalSequence = -1;
+  private replayThrough: number | undefined;
+  private sourceHandshakeValidated = false;
   private serverErrorCode: ServerFailureCode | undefined;
   /** Same uninterrupted provider bridge, not merely the most recent gateway receipt. */
   completionConfirmed(): boolean { return !!this.telemetry.drainedUtc && !this.continuityLost; }
@@ -94,7 +102,7 @@ export class ForegroundStream {
     private readonly onFailure: (message: string) => void,
     private readonly buffer?: OfflineAudioBuffer,
     private readonly recovery?: {
-      connect(): Promise<LiveSocket>;
+      connect(cursor?: LiveResumeCursor): Promise<LiveSocket>;
       onStatus(message: string): void;
       onConnectionInterrupted?(connectionId: number): void;
     },
@@ -106,6 +114,8 @@ export class ForegroundStream {
     this.socket = socket;
     const generation = ++this.connectionGeneration;
     this.opened = false;
+    this.replayThrough = undefined;
+    this.sourceHandshakeValidated = false;
     this.transportError = false;
     this.errorTimer = undefined;
     this.timer = setTimeout(() => this.guard(() => this.reconnecting ? this.closed(1006) : this.fail('Ses sunucusu hazır olmadı.')), 15000);
@@ -225,7 +235,7 @@ export class ForegroundStream {
   private closed(code?: number): void {
     if (this.everReady) {
       this.continuityLost = true;
-      this.recovery?.onConnectionInterrupted?.(this.connectionGeneration);
+      this.recovery?.onConnectionInterrupted?.(this.sourceEpoch ? this.sourceConnectionId : this.connectionGeneration);
     }
     this.telemetry.closeCode = Number.isInteger(code) ? code! : 0;
     if (this.recovery && this.buffer && this.everReady && !this.stopping && (code === 1006 || code === undefined)) {
@@ -246,7 +256,8 @@ export class ForegroundStream {
         this.timer = setTimeout(() => {
           if (!this.finished && !this.stopping && generation === this.connectionGeneration) this.guard(() => this.closed(1006));
         }, 15000);
-        void this.recovery!.connect().then(socket => {
+        void this.recovery!.connect(this.sourceEpoch
+          ? { sourceEpoch: this.sourceEpoch, afterFinal: this.lastFinalSequence } : undefined).then(socket => {
           if (this.finished || this.stopping || generation !== this.connectionGeneration) {
             try { socket.close(); } catch { /* The obsolete socket must never join the active stream. */ } return;
           }
@@ -275,20 +286,34 @@ export class ForegroundStream {
     if (!event || typeof event !== 'object') return;
     if (!this.bufferIntact()) return;
     if (event.type === 'ready' && !this.ready && !this.stopping) {
-      clearTimeout(this.timer);
-      this.ready = true;
-      this.reconnecting = false;
-      this.transportError = false;
-      this.buffer?.resetInFlight();
-      this.waitingSince = this.buffer?.pending() ? Date.now() : undefined;
-      if (!this.buffer?.pending()) {
-        clearTimeout(this.recoveryTimer); this.recoveryTimer = undefined;
+      if (this.replayThrough !== undefined) { this.fail('Ses devam onayı tutarsız; kayıt durduruldu.'); return; }
+      if (event.resume_protocol === LIVE_RESUME_PROTOCOL) {
+        const epoch = event.source_epoch;
+        const after = event.replay_after;
+        const through = event.replay_through;
+        if (typeof epoch !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(epoch) ||
+          !Number.isSafeInteger(after) || !Number.isSafeInteger(through) ||
+          after !== this.lastFinalSequence || (through as number) < (after as number) ||
+          (this.sourceEpoch ? epoch !== this.sourceEpoch : this.everReady)) {
+          this.fail('Önceki ses oturumunun devamı doğrulanamadı; kayıt durduruldu.'); return;
+        }
+        if (!this.sourceEpoch) { this.sourceEpoch = epoch; this.sourceConnectionId = this.connectionGeneration; }
+        this.replayThrough = through as number;
+        this.sourceHandshakeValidated = true;
+        // Replay must be accepted before capture/replay upload can restart.
+        return;
       }
-      if (this.buffer && !this.flushTimer) this.flushTimer = setInterval(() => this.guard(() => this.flushQueue()), 250);
-      if (this.everReady) {
-        this.recovery?.onStatus('Ses bağlantısı yeniden kuruldu; bekleyen parçalar gönderiliyor.');
-        this.flushQueue();
-      } else { this.everReady = true; this.onReady(); }
+      if (this.sourceEpoch) { this.fail('Sunucu önceki ses oturumunun devamını doğrulamadı.'); return; }
+      this.acceptReady();
+    } else if (event.type === 'resume_complete') {
+      if (this.stopping) return;
+      if (!this.sourceEpoch || this.replayThrough === undefined || event.source_epoch !== this.sourceEpoch ||
+        event.replay_through !== this.replayThrough || this.lastFinalSequence !== this.replayThrough) {
+        this.fail('Bekleyen konuşma metinlerinin tamamı alınamadı; kayıt durduruldu.'); return;
+      }
+      this.replayThrough = undefined;
+      this.continuityLost = false;
+      this.acceptReady();
     } else if (event.type === 'audio_ack' && this.buffer && Object.keys(event).length === 2 &&
       Number.isSafeInteger(event.chunk_seq) && (event.chunk_seq as number) >= 0) {
       const before = this.buffer.pending();
@@ -312,19 +337,47 @@ export class ForegroundStream {
       this.dispose();
       resolve?.(true);
     } else if (Number.isSafeInteger(event.seq) && (event.seq as number) >= 0) {
+      if (this.sourceEpoch && !this.sourceHandshakeValidated) {
+        this.fail('Metin gelmeden önce ses oturumunun devamı doğrulanamadı.'); return;
+      }
       if (event.type === 'partial' && typeof event.confirmed === 'string' && typeof event.tentative === 'string') {
         this.telemetry.partialEvents++; this.telemetry.lastTextUtc = new Date().toISOString();
-        this.onText({ connectionId: this.connectionGeneration, seq: event.seq as number, text: [event.confirmed, event.tentative].filter(Boolean).join(' '), final: false, confirmed: event.confirmed, tentative: event.tentative });
+        this.onText({ connectionId: this.sourceEpoch ? this.sourceConnectionId : this.connectionGeneration, seq: event.seq as number, text: [event.confirmed, event.tentative].filter(Boolean).join(' '), final: false, confirmed: event.confirmed, tentative: event.tentative });
       } else if (event.type === 'final' && typeof event.text === 'string') {
+        if (this.sourceEpoch) {
+          if ((event.seq as number) <= this.lastFinalSequence) return;
+          if (event.seq !== this.lastFinalSequence + 1) {
+            this.fail('Konuşma metninde eksik bölüm var; kayıt durduruldu.'); return;
+          }
+        }
         this.telemetry.finalEvents++; this.telemetry.lastTextUtc = new Date().toISOString();
         const speakerAttribution = readSpeakerAttribution(event.speakerAttribution, event.text, event.source_start_sample, event.source_end_sample);
         const validRange = Number.isSafeInteger(event.source_start_sample) && Number.isSafeInteger(event.source_end_sample) &&
           (event.source_start_sample as number) >= 0 && (event.source_end_sample as number) > (event.source_start_sample as number);
-        this.onText({ connectionId: this.connectionGeneration, seq: event.seq as number, text: event.text, final: true,
+        this.onText({ connectionId: this.sourceEpoch ? this.sourceConnectionId : this.connectionGeneration, seq: event.seq as number, text: event.text, final: true,
+          ...(this.sourceEpoch ? { sourceContinued: true } : {}),
           ...(validRange ? { sourceStartSample: event.source_start_sample as number, sourceEndSample: event.source_end_sample as number } : {}),
           ...(speakerAttribution ? { speakerAttribution } : {}) });
+        if (this.sourceEpoch) this.lastFinalSequence = event.seq as number;
       }
     }
+  }
+
+  private acceptReady(): void {
+      clearTimeout(this.timer);
+      this.ready = true;
+      this.reconnecting = false;
+      this.transportError = false;
+      this.buffer?.resetInFlight();
+      this.waitingSince = this.buffer?.pending() ? Date.now() : undefined;
+      if (!this.buffer?.pending()) {
+        clearTimeout(this.recoveryTimer); this.recoveryTimer = undefined;
+      }
+      if (this.buffer && !this.flushTimer) this.flushTimer = setInterval(() => this.guard(() => this.flushQueue()), 250);
+      if (this.everReady) {
+        this.recovery?.onStatus('Ses bağlantısı yeniden kuruldu; bekleyen parçalar gönderiliyor.');
+        this.flushQueue();
+      } else { this.everReady = true; this.onReady(); }
   }
 
   private sent(seq: number): void {

@@ -18,7 +18,7 @@ import type { SpeakerAttribution } from './speakerAttribution';
 export type TranscriptLineStatus = 'draft' | 'stabilizing' | 'final' | 'revised' | 'interrupted';
 
 export interface TranscriptLine {
-  /** Local socket generation; legacy/demo events without it belong to generation 0. */
+  /** Stable verified source generation, or physical generation for legacy streams. */
   readonly connectionId?: number;
   readonly seq: number;
   /** Rendered text: draft = confirmed + tentative, final/revised = kesin metin. */
@@ -37,7 +37,7 @@ export interface TranscriptState {
 export type TranscriptEvent = ((WsStreamEvent
   | { type: 'partial'; seq: number; confirmed: string; tentative: string }
   | { type: 'final'; seq: number; text: string; speakerAttribution?: SpeakerAttribution })
-  & { connectionId?: number })
+  & { connectionId?: number; sourceContinued?: boolean })
   | { type: 'connection_interrupted'; connectionId: number };
 
 export function transcriptLineKey(line: Pick<TranscriptLine, 'connectionId' | 'seq'>): string {
@@ -100,7 +100,9 @@ export function applyTranscriptEvent(
     }
     case 'final': {
       const existing = state.lines.find((line) => transcriptLineKey(line) === transcriptLineKey(event));
-      if (existing?.status === 'interrupted') return state; // closed socket callbacks are obsolete
+      // Only the transport's verified same-source replay may settle a pre-drop draft.
+      // Obsolete physical callbacks remain fenced before entering this reducer.
+      if (existing?.status === 'interrupted' && event.sourceContinued !== true) return state;
       const alreadySettled = existing?.status === 'final' || existing?.status === 'revised';
       const speakerAttribution = 'speakerAttribution' in event ? event.speakerAttribution : undefined;
       if (alreadySettled && existing.text === event.text &&

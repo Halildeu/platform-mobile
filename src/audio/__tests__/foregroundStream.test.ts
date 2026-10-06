@@ -59,10 +59,10 @@ function recoverySetup() {
   const makeSocket = (): LiveSocket => ({ readyState: 1, bufferedAmount: 0, onopen: null, onmessage: null,
     onerror: null, onclose: null, send: jest.fn(), close: jest.fn() });
   const first = makeSocket(); const second = makeSocket(); const buffer = new OfflineAudioBuffer();
-  const ready = jest.fn(); const fail = jest.fn(); const connect = jest.fn(async () => second);
-  const client = new ForegroundStream(first, ready, jest.fn(), fail, buffer, { connect, onStatus: jest.fn() });
+  const ready = jest.fn(); const fail = jest.fn(); const text = jest.fn(); const connect = jest.fn(async () => second);
+  const client = new ForegroundStream(first, ready, text, fail, buffer, { connect, onStatus: jest.fn() });
   const emit = (socket: LiveSocket, value: object) => socket.onmessage?.({ data: JSON.stringify(value) });
-  return { first, second, buffer, ready, fail, connect, client, emit };
+  return { first, second, buffer, ready, fail, text, connect, client, emit };
 }
 
 test('reconnect retains original sequence and ignores receipts from the old socket', async () => {
@@ -398,4 +398,125 @@ test('an uninterrupted bridge can confirm completion only after drained', async 
   expect(client.completionConfirmed()).toBe(false);
   const stopping = client.stop(); event({ type: 'drained' });
   expect(await stopping).toBe(true); expect(client.completionConfirmed()).toBe(true);
+});
+
+const resumeEpoch = '11111111-2222-4333-8444-555555555555';
+const resumeReady = (after: number, through: number, epoch = resumeEpoch) => ({ type: 'ready',
+  resume_protocol: 'recording-resume-v1', source_epoch: epoch, replay_after: after, replay_through: through });
+const resumed = (through: number) => ({ type: 'resume_complete', source_epoch: resumeEpoch, replay_through: through });
+
+test('same provider survives 30s offline capture, replays missed finals once and proves completion', async () => {
+  const { first, second, client, emit, text, connect, ready, fail, buffer } = recoverySetup();
+  emit(first, resumeReady(-1, -1));
+  expect(ready).not.toHaveBeenCalled();
+  emit(first, resumed(-1));
+  expect(ready).toHaveBeenCalledTimes(1);
+  client.send(new ArrayBuffer(3200), 16000, 1, 0);
+  emit(first, { type: 'audio_ack', chunk_seq: 0 });
+  emit(first, { type: 'final', seq: 0, text: 'Online first.' });
+  first.onclose?.({ code: 1006 });
+  connect.mockRejectedValueOnce(new Error('Offline'));
+  for (let count = 0; count < 30; count++) {
+    expect(client.send(new ArrayBuffer(3200), 16000, 1, count + 1)).toBe(true);
+    await jest.advanceTimersByTimeAsync(1000);
+  }
+  expect(connect).toHaveBeenLastCalledWith({ sourceEpoch: resumeEpoch, afterFinal: 0 });
+  emit(second, resumeReady(0, 1));
+  expect(second.send).not.toHaveBeenCalled();
+  expect(client.diagnostics().continuityLost).toBe(true);
+  emit(second, { type: 'final', seq: 1, text: 'Final emitted while detached.' });
+  emit(second, resumed(1));
+  expect(client.diagnostics().continuityLost).toBe(false);
+  expect(ready).toHaveBeenCalledTimes(1);
+  expect(second.send).toHaveBeenCalledTimes(30);
+  for (let seq = 1; seq <= 30; seq++) emit(second, { type: 'audio_ack', chunk_seq: seq });
+  emit(second, { type: 'final', seq: 1, text: 'Final emitted while detached.' });
+  emit(second, { type: 'final', seq: 2, text: 'Offline speech recovered.' });
+  expect(text.mock.calls.map(([line]) => [line.connectionId, line.seq])).toEqual([[1, 0], [1, 1], [1, 2]]);
+  expect(buffer.pending()).toBe(0);
+  const stop = client.stop(); emit(second, { type: 'drained' });
+  expect(await stop).toBe(true);
+  expect(client.completionConfirmed()).toBe(true);
+  expect(fail).not.toHaveBeenCalled();
+});
+
+test.each(['foreign epoch', 'missing final', 'wrong cursor', 'legacy ready'])('resume proof fails closed: %s', async variant => {
+  const { first, second, client, emit, fail } = recoverySetup();
+  emit(first, resumeReady(-1, -1)); emit(first, resumed(-1));
+  first.onclose?.({ code: 1006 }); await jest.advanceTimersByTimeAsync(500);
+  if (variant === 'foreign epoch') emit(second, resumeReady(-1, -1, 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'));
+  else if (variant === 'wrong cursor') emit(second, resumeReady(0, 0));
+  else if (variant === 'legacy ready') emit(second, { type: 'ready' });
+  else { emit(second, resumeReady(-1, 0)); emit(second, resumed(0)); }
+  expect(fail).toHaveBeenCalledTimes(1);
+  expect(client.completionConfirmed()).toBe(false);
+  expect(client.diagnostics().continuityLost).toBe(true);
+  expect(second.send).not.toHaveBeenCalled();
+});
+
+test.each(['partial', 'final'])('replacement socket rejects %s before its resume handshake', async type => {
+  const { first, second, client, emit, fail, text } = recoverySetup();
+  emit(first, resumeReady(-1, -1)); emit(first, resumed(-1));
+  first.onclose?.({ code: 1006 }); await jest.advanceTimersByTimeAsync(500);
+  emit(second, { type, seq: 0, text: 'Unverified', confirmed: '', tentative: 'Unverified' });
+  expect(text).not.toHaveBeenCalled();
+  expect(fail).toHaveBeenCalledTimes(1);
+  expect(client.completionConfirmed()).toBe(false);
+});
+
+test.each([false, true])('negotiated provider final remains accepted during EOF drain, reconnect=%s', async reconnect => {
+  const { first, second, client, emit, fail, text } = recoverySetup();
+  emit(first, resumeReady(-1, -1)); emit(first, resumed(-1));
+  let current = first;
+  if (reconnect) {
+    first.onclose?.({ code: 1006 }); await jest.advanceTimersByTimeAsync(500);
+    emit(second, resumeReady(-1, -1)); emit(second, resumed(-1)); current = second;
+  }
+  client.send(new ArrayBuffer(3200), 16000, 1, 0);
+  emit(current, { type: 'audio_ack', chunk_seq: 0 });
+  const stopping = client.stop();
+  emit(current, { type: 'final', seq: 0, text: 'Final after stop.' });
+  emit(current, { type: 'drained' });
+  expect(text).toHaveBeenCalledWith(expect.objectContaining({ text: 'Final after stop.', final: true, sourceContinued: true }));
+  expect(await stopping).toBe(true);
+  expect(client.completionConfirmed()).toBe(true);
+  expect(fail).not.toHaveBeenCalled();
+});
+
+test('a resume final gap never advances the consumer cursor', () => {
+  const { client, event, text, fail } = setup();
+  event(resumeReady(-1, -1)); event(resumed(-1));
+  event({ type: 'final', seq: 1, text: 'Missing sequence zero.' });
+  expect(text).not.toHaveBeenCalled(); expect(fail).toHaveBeenCalledTimes(1);
+  expect(client.completionConfirmed()).toBe(false);
+});
+test('verified replay replaces interrupted draft in the actual transcript reducer before continuity proof', async () => {
+  const socket = (): LiveSocket => ({ readyState: 1, bufferedAmount: 0, onopen: null, onmessage: null,
+    onerror: null, onclose: null, send: jest.fn(), close: jest.fn() });
+  const first = socket(); const second = socket(); const fail = jest.fn();
+  let state = initialTranscriptState();
+  const stream = new ForegroundStream(first, jest.fn(), line => {
+    state = applyTranscriptEvent(state, line.final
+      ? { type: 'final', connectionId: line.connectionId, sourceContinued: line.sourceContinued, seq: line.seq, text: line.text }
+      : { type: 'partial', connectionId: line.connectionId, seq: line.seq, confirmed: line.confirmed ?? '', tentative: line.tentative ?? '' });
+  }, fail, new OfflineAudioBuffer(), {
+    connect: async () => second, onStatus: jest.fn(),
+    onConnectionInterrupted: connectionId => { state = applyTranscriptEvent(state, { type: 'connection_interrupted', connectionId }); },
+  });
+  const emit = (target: LiveSocket, value: object) => target.onmessage?.({ data: JSON.stringify(value) });
+  emit(first, resumeReady(-1, -1)); emit(first, resumed(-1));
+  emit(first, { type: 'partial', seq: 0, confirmed: '', tentative: 'unfinished' });
+  first.onclose?.({ code: 1006 });
+  expect(state.lines[0].status).toBe('interrupted');
+  await jest.advanceTimersByTimeAsync(500);
+  emit(second, resumeReady(-1, 0));
+  emit(second, { type: 'final', seq: 0, text: 'Recovered complete sentence.' });
+  expect(state.lines).toHaveLength(1);
+  expect(state.lines[0]).toMatchObject({ connectionId: 1, seq: 0, text: 'Recovered complete sentence.', status: 'final' });
+  emit(first, { type: 'final', seq: 0, text: 'stale callback' });
+  expect(state.lines[0].text).toBe('Recovered complete sentence.');
+  emit(second, resumed(0));
+  expect(stream.diagnostics().continuityLost).toBe(false);
+  expect(fail).not.toHaveBeenCalled();
+  stream.dispose();
 });
