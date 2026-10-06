@@ -44,8 +44,23 @@ test('four entries are bounded; fifth never evicts pending metadata', async () =
     await f.journal.edit(row.id, f.journal.acquire(row.id)!, () => row);
   }
   const prior = f.value(); const extra = await record(f.journal, 'SES-fifth');
-  await expect(f.journal.edit(extra.id, f.journal.acquire(extra.id)!, () => extra)).rejects.toThrow();
+  await expect(f.journal.assertCapacity()).rejects.toThrow('AUDIO_CAPACITY');
+  await expect(f.journal.edit(extra.id, f.journal.acquire(extra.id)!, () => extra)).rejects.toThrow('AUDIO_CAPACITY');
   expect(f.value()).toBe(prior);
+});
+
+test('preflight does not reserve capacity: concurrent insertion still rejects at four', async () => {
+  const f = fixture();
+  for (let i = 0; i < 3; i++) {
+    const row = await record(f.journal, `SES-${i}`);
+    await f.journal.edit(row.id, f.journal.acquire(row.id)!, () => row);
+  }
+  await f.journal.assertCapacity(); await f.journal.assertCapacity();
+  const a = await record(f.journal, 'SES-fourth');
+  const b = await record(f.journal, 'SES-fifth');
+  await f.journal.edit(a.id, f.journal.acquire(a.id)!, () => a);
+  await expect(f.journal.edit(b.id, f.journal.acquire(b.id)!, () => b)).rejects.toThrow('AUDIO_CAPACITY');
+  expect(await f.journal.list()).toHaveLength(4);
 });
 test('identity, state and policy are validated before paths can be derived', async () => {
   const f = fixture(); const row = await record(f.journal);

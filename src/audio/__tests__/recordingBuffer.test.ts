@@ -1,4 +1,4 @@
-import { createRecordingBuffer } from '../recordingBuffer';
+import { createRecordingBuffer, prepareRecordingStorage } from '../recordingBuffer';
 import { OfflineAudioBuffer } from '../offlineBuffer';
 
 function fixture(retentionMs: unknown = 60000) {
@@ -10,12 +10,14 @@ function fixture(retentionMs: unknown = 60000) {
   return { buffer, handle, open, options };
 }
 test.each([null, undefined])('unset retention uses memory without identity or native storage (%s)', async retention => {
+  await expect(prepareRecordingStorage(retention)).resolves.toBeUndefined();
   const f = fixture(); f.options.retentionMs = retention;
   const result = await createRecordingBuffer(f.options, f.open);
   expect(result.mode).toBe('memory');
   expect(f.open).not.toHaveBeenCalled(); expect(f.options.ownerScope).not.toHaveBeenCalled();
 });
 test.each([0, -1, 1.2, '60000', NaN, Infinity])('invalid configured duration rejects before storage (%s)', async retention => {
+  await expect(prepareRecordingStorage(retention)).rejects.toThrow('saklama süresi');
   const f = fixture(retention);
   await expect(createRecordingBuffer(f.options, f.open)).rejects.toThrow();
   expect(f.open).not.toHaveBeenCalled();

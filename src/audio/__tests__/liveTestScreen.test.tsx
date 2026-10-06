@@ -3,6 +3,8 @@ import { Alert, AppState, Platform, Share } from 'react-native';
 import * as Crypto from 'expo-crypto';
 import LiveTestScreen from '../../../app/live-test';
 import * as api from '../liveTestApi';
+import * as recordingStorage from '../recordingBuffer';
+import { BufferStorageError } from '../bufferFailure';
 import { clearMeetingViews, saveMeetingView } from '../meetingViewCache';
 import type { LiveText } from '../foregroundStream';
 import type { AnalysisSnapshot } from '../../analysis/liveAnalysis';
@@ -108,6 +110,17 @@ async function openAndStart() {
   await act(async () => { alert.mock.calls[0][2]?.[1].onPress?.(); });
   return screen;
 }
+
+it('rejects full local storage before starting another server recording or microphone', async () => {
+  mockPermission.mockResolvedValue({ granted: true });
+  jest.spyOn(recordingStorage, 'prepareRecordingStorage').mockRejectedValueOnce(new BufferStorageError('AUDIO_CAPACITY'));
+  const screen = await openAndStart();
+  expect(screen.getByText(/AUDIO_CAPACITY/)).toBeTruthy();
+  expect(api.begin).not.toHaveBeenCalled();
+  expect(mockStart).not.toHaveBeenCalled();
+  expect(api.completeCapture).not.toHaveBeenCalled();
+  screen.unmount();
+});
 
 it('preserves validated speaker attribution through the actual live screen callback', async () => {
   mockPermission.mockResolvedValue({ granted: true });

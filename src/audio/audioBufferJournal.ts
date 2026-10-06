@@ -1,3 +1,4 @@
+import { BufferStorageError } from './bufferFailure';
 /** Metadata only. PCM and credentials never enter this bounded, encrypted index. */
 export type BufferRecord = {
   id: string; ownerHash: string; sessionId: string; retentionMs: number;
@@ -63,6 +64,12 @@ export class AudioBufferJournal {
     return this.validate(parsed.records);
   }
   list(): Promise<BufferRecord[]> { return this.ordered(() => this.read()); }
+  /** Read-only preflight. The atomic edit still checks capacity against concurrent starts. */
+  assertCapacity(): Promise<void> {
+    return this.ordered(async () => {
+      if ((await this.read()).length >= 4) throw new BufferStorageError('AUDIO_CAPACITY');
+    });
+  }
   /** The synchronous edit may seal its buffer; no await separates its checks and transition. */
   edit(id: string, lease: symbol, edit: (record: BufferRecord | undefined) => BufferRecord | undefined): Promise<void> {
     return this.ordered(async () => {
@@ -73,6 +80,7 @@ export class AudioBufferJournal {
       if (next && next.id !== id) throw invalid();
       const updated = rows.filter(row => row.id !== id);
       if (next) updated.push(next);
+      if (updated.length > 4) throw new BufferStorageError('AUDIO_CAPACITY');
       await this.validate(updated);
       const value = JSON.stringify({ version: 1, records: updated });
       if (new TextEncoder().encode(value).byteLength > 2048) throw invalid();

@@ -15,7 +15,7 @@ import { messageEvent } from '../src/diagnostics/messageEvent';
 import { HistoryPanel } from '../src/diagnostics/HistoryPanel';
 import { openAccountHistory } from '../src/diagnostics/openAccountHistory';
 import { diagnosticFailureCode, type DiagnosticFailureCode } from '../src/diagnostics/openFailure';
-import { createRecordingBuffer } from '../src/audio/recordingBuffer';
+import { createRecordingBuffer, prepareRecordingStorage } from '../src/audio/recordingBuffer';
 import * as api from '../src/audio/liveTestApi';
 import { NewMeetingForm } from '../src/audio/NewMeetingForm';
 import { backgroundStopReason, configureBackgroundCapture, listenBackgroundStop, startPcmCapture, supportsBackgroundCapture } from '../src/audio/backgroundCapture';
@@ -478,6 +478,9 @@ export default function LiveTestScreen() {
       finally { permissionPending.current = false; }
       if (generation.current !== run) return;
       if (['background'].includes(AppState.currentState)) throw new Error('Kaydı başlatmak için uygulamaya dönün.');
+      markStage('Ses tamponu hazırlanıyor');
+      await prepareRecordingStorage(Constants.expoConfig?.extra?.audioBufferRetentionMs);
+      if (generation.current !== run || !active.current) return;
       const id = await api.begin(token.current.jwt, selected, markStage);
       if (generation.current !== run) { await api.completeCapture(token.current.jwt, id, true); return; }
       session.current = id;

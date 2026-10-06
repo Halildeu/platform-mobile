@@ -9,7 +9,7 @@ import { bufferJournal, BUFFER_JOURNAL_KEY } from '../nativeBufferJournal';
 import { discardAbandonedBuffer, discardOwnerAudioBuffers, openEncryptedChunkBuffer, reopenEncryptedChunkBuffer, sweepEncryptedChunkBuffers } from '../encryptedChunkBuffer';
 import { replayPendingAudio } from '../pendingAudioReplay';
 import type { LiveSocket } from '../foregroundStream';
-import { createRecordingBuffer } from '../recordingBuffer';
+import { createRecordingBuffer, prepareRecordingStorage } from '../recordingBuffer';
 
 let mockDirectory: string;
 let mockNativeDirectory: string;
@@ -299,10 +299,52 @@ test('native SQL/key error text is never returned to the screen', async () => {
     getFirstSync: () => ({ cipher_version: 'synthetic' }), closeSync: close,
     execSync: () => { throw new Error('PRAGMA key PRIVATE_SYNTHETIC_KEY'); },
   } as unknown as SQLite.SQLiteDatabase);
-  await expect(openEncryptedChunkBuffer(opts)).rejects.toThrow('Şifreli ses deposu işlemi doğrulanamadı');
+  await expect(openEncryptedChunkBuffer(opts)).rejects.toThrow('AUDIO_UNLOCK');
   expect(close).toHaveBeenCalledTimes(1);
   expect((await bufferJournal.list())[0].state).toBe('creating');
   await sweepEncryptedChunkBuffers();
+});
+
+test('four retained records reject a fifth with a capacity code, without opening a DB or overwriting keys', async () => {
+  for (let i = 0; i < 4; i++) {
+    const handle = await openEncryptedChunkBuffer(options()); handle.close();
+  }
+  const before = new Map(stored);
+  const opens = jest.mocked(SQLite.openDatabaseSync).mock.calls.length;
+  await expect(prepareRecordingStorage(900000)).rejects.toThrow('AUDIO_CAPACITY');
+  await expect(openEncryptedChunkBuffer(options())).rejects.toThrow('AUDIO_CAPACITY');
+  expect(stored).toEqual(before);
+  expect(SQLite.openDatabaseSync).toHaveBeenCalledTimes(opens);
+});
+
+test('preflight journal access failure never exposes native error details', async () => {
+  jest.mocked(SecureStore.getItemAsync).mockRejectedValueOnce(new Error('PRIVATE_KEY_PATH'));
+  const error = await prepareRecordingStorage(900000).catch(e => e);
+  expect(error.message).toContain('AUDIO_JOURNAL');
+  expect(error.message).not.toContain('PRIVATE_KEY_PATH');
+  expect(SQLite.openDatabaseSync).not.toHaveBeenCalled();
+});
+
+test.each(['key', 'open', 'cipher', 'schema'] as const)('startup %s failures expose only a fixed code and release the lease', async failure => {
+  const opts = options();
+  const secret = 'PRIVATE_NATIVE_SQL_KEY_PATH';
+  const expected = { key: 'AUDIO_KEY_WRITE', open: 'AUDIO_DATABASE', cipher: 'AUDIO_CIPHER', schema: 'AUDIO_SCHEMA' }[failure];
+  if (failure === 'key') {
+    const original = jest.mocked(SecureStore.setItemAsync).getMockImplementation()!;
+    jest.mocked(SecureStore.setItemAsync).mockImplementation(async (name, value, config) => {
+      if (name.startsWith('audio-buffer-')) throw new Error(secret);
+      return original(name, value, config);
+    });
+  } else if (failure === 'open') jest.mocked(SQLite.openDatabaseSync).mockImplementationOnce(() => { throw new Error(secret); });
+  else jest.mocked(SQLite.openDatabaseSync).mockReturnValueOnce({
+    getFirstSync: () => failure === 'cipher' ? null : { cipher_version: 'synthetic' },
+    execSync: (sql: string) => { if (sql.startsWith('CREATE')) throw new Error(secret); }, closeSync: jest.fn(),
+  } as unknown as SQLite.SQLiteDatabase);
+  const error = await openEncryptedChunkBuffer(opts).catch(e => e);
+  expect(error.message).toContain(expected);
+  expect(error.message).not.toContain(secret);
+  const lease = bufferJournal.acquire(identity(opts.sessionId));
+  expect(lease).not.toBeNull(); bufferJournal.release(identity(opts.sessionId), lease!);
 });
 
 test('reopen preserves original identity, bytes, timestamps and TTL and disallows new capture', async () => {

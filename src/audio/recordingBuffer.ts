@@ -1,4 +1,19 @@
 import { OfflineAudioBuffer } from './offlineBuffer';
+import { BufferStorageError } from './bufferFailure';
+import { bufferJournal } from './nativeBufferJournal';
+
+/** Check local admission before creating another remote recording/session. Never discards entries. */
+export async function prepareRecordingStorage(retentionMs: unknown): Promise<void> {
+  if (retentionMs === undefined || retentionMs === null) return;
+  if (typeof retentionMs !== 'number' || !Number.isSafeInteger(retentionMs) || retentionMs <= 0) {
+    throw new Error('Ses saklama süresi geçersiz; kayıt başlatılmadı.');
+  }
+  try {
+    await bufferJournal.assertCapacity();
+  } catch (error) {
+    throw error instanceof BufferStorageError ? error : new BufferStorageError('AUDIO_JOURNAL');
+  }
+}
 
 type DurableHandle = {
   buffer: OfflineAudioBuffer;
@@ -18,7 +33,7 @@ type Open = (options: {
   maxBytes: number; maxChunks: number; onStorageError: () => void;
 }) => Promise<DurableHandle>;
 
-/** No native storage is loaded when retention has not been configured. */
+/** No native database is opened when retention has not been configured. */
 export async function createRecordingBuffer(options: Options, open?: Open) {
   const limits = { maxBytes: 2 * 1024 * 1024, maxChunks: 2000 };
   if (options.retentionMs === undefined || options.retentionMs === null) {

@@ -70,10 +70,9 @@ reserved characters, reopen, cleanup and the old pre-capture `creating` intent.
 This reproduces the reported startup error without treating synthetic cipher
 capability as physical-device proof. A rebuilt APK still requires device acceptance.
 
-The 2026-10-06 device report for meeting 479f4b94-adb7-455d-a857-a1eed670802d
-confirms stage 3 completed and microphone capture started at 07:33:59 UTC.
+The device report confirms stage 3 completed and microphone capture started.
 The subsequent airplane/network interruption screenshot reports close 1006 and
-38 unacknowledged chunks. The supplied history ends before the interruption,
+unacknowledged chunks. The supplied history ends before the interruption,
 so it cannot establish the exact retry timing or the server-side close cause.
 An independent regression test reproduces a client defect: three immediately
 rejected reconnects exhausted recovery in 3.5 seconds, before a 30-second outage
@@ -90,6 +89,18 @@ ready/close without receipts, and a later independent outage after ACK progress.
 These are transport simulations, not proof that Speechmatics transcribed all
 three device-test sentences. A reconnected provider bridge still cannot certify
 the original recording's complete source coverage; that boundary is unchanged.
+
+A subsequent startup report still shows the generic encrypted-storage error.
+Its native cause has NOT been established. A separate regression reproduces
+the same message when four unresolved journal entries prevent a fifth start.
+The client now checks capacity before creating a remote recording and retains
+the atomic insertion check for concurrent attempts. Neither check evicts audio
+or tombstones. Storage opening reports fixed, non-sensitive stage codes for
+journal, file, key, database, cipher, schema and ready-publication failures;
+native exception text, SQL, paths and keys remain excluded. This removes the
+ambiguous error and prevents new remote sessions on known local capacity
+failure; it does not constitute device acceptance or automatic recovery of
+the previous recordings. The four-entry/2048-byte bound is unchanged.
 
 Tests use actual SQLite for rollback, reopened loss counters and persistent-file
 cleanup, with injected native boundaries. A synthetic cipher capability in

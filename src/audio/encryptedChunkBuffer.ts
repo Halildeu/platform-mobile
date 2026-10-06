@@ -7,6 +7,7 @@ import { SqliteChunkStore, type SqliteLike } from './sqliteChunkStore';
 import { bufferJournal } from './nativeBufferJournal';
 import type { BufferRecord } from './audioBufferJournal';
 import { databaseFileUri } from '../diagnostics/databaseFileUri';
+import { BufferStorageError, type BufferFailureCode } from './bufferFailure';
 
 const keyName = (id: string) => `audio-buffer-${id}`;
 const fileName = (id: string) => `audio-${id}.db`;
@@ -28,11 +29,15 @@ export function validateBufferPolicy(retentionMs: number | undefined, maxChunks:
 }
 
 function unlock(db: SQLite.SQLiteDatabase, key: string) {
-  if (!/^[a-f0-9]{64}$/.test(key)) throw new Error('Ses tamponu anahtarı geçersiz.');
-  const cipher = db.getFirstSync<{ cipher_version: string }>('PRAGMA cipher_version');
-  if (!cipher?.cipher_version) throw new Error('Şifreli depolama bu uygulama sürümünde yok.');
-  db.execSync(`PRAGMA key = "x'${key}'"`);
-  db.execSync('PRAGMA secure_delete = ON;');
+  if (!/^[a-f0-9]{64}$/.test(key)) throw new BufferStorageError('AUDIO_KEY_READ');
+  try {
+    const cipher = db.getFirstSync<{ cipher_version: string }>('PRAGMA cipher_version');
+    if (!cipher?.cipher_version) throw new Error();
+  } catch { throw new BufferStorageError('AUDIO_CIPHER'); }
+  try {
+    db.execSync(`PRAGMA key = "x'${key}'"`);
+    db.execSync('PRAGMA secure_delete = ON;');
+  } catch { throw new BufferStorageError('AUDIO_UNLOCK'); }
 }
 
 /** Must hold a lease with a successfully closed DB before removing any key/file. */
@@ -87,6 +92,7 @@ async function openNativeBuffer(options: BufferOptions, mode: 'create' | 'existi
     retentionMs: options.retentionMs!, state: 'creating' };
   let db: SQLite.SQLiteDatabase | undefined;
   let leaseHeld = true;
+  let openingStage: BufferFailureCode = 'AUDIO_JOURNAL';
   const releaseLease = () => { if (leaseHeld) { bufferJournal.release(id, lease); leaseHeld = false; } };
   try {
     let key: string;
@@ -95,7 +101,9 @@ async function openNativeBuffer(options: BufferOptions, mode: 'create' | 'existi
       if (!existing || existing.state !== 'ready' || existing.ownerHash !== options.ownerScope ||
           existing.sessionId !== options.sessionId) throw storageFailure();
       record = existing;
+      openingStage = 'AUDIO_KEY_READ';
       const originalKey = await SecureStore.getItemAsync(keyName(id));
+      openingStage = 'AUDIO_FILES';
       if (!fileExists(id) || !originalKey || !/^[a-f0-9]{64}$/.test(originalKey)) {
         await bufferJournal.edit(id, lease, row => ({ ...row!, state: 'lost' }));
         throw storageFailure();
@@ -106,16 +114,22 @@ async function openNativeBuffer(options: BufferOptions, mode: 'create' | 'existi
         if (existing) throw new Error('Bu ses oturumu zaten kayıtlı; kurtarma gerekli.');
         return record;
       });
-      if (anyFileExists(id) || await SecureStore.getItemAsync(keyName(id)) !== null) {
+      openingStage = 'AUDIO_FILES';
+      const hasFiles = anyFileExists(id);
+      openingStage = 'AUDIO_KEY_READ';
+      if (hasFiles || await SecureStore.getItemAsync(keyName(id)) !== null) {
         await bufferJournal.edit(id, lease, row => ({ ...row!, state: 'lost' }));
         throw new Error('Önceki ses deposu bulundu; yeni dosya ile değiştirilemez.');
       }
+      openingStage = 'AUDIO_KEY_WRITE';
       key = Array.from(Crypto.getRandomBytes(32), byte => byte.toString(16).padStart(2, '0')).join('');
       await SecureStore.setItemAsync(keyName(id), key, { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
       if (await SecureStore.getItemAsync(keyName(id)) !== key) throw new Error('Ses anahtarı doğrulanamadı.');
     }
+    openingStage = 'AUDIO_DATABASE';
     db = SQLite.openDatabaseSync(fileName(id));
     unlock(db, key);
+    openingStage = 'AUDIO_SCHEMA';
     const database = db;
     let closed = false;
     let databaseClosed = false;
@@ -136,6 +150,7 @@ async function openNativeBuffer(options: BufferOptions, mode: 'create' | 'existi
     const buffer = new OfflineAudioBuffer({ store: new SqliteChunkStore(adapter, mode), ttlMs: record.retentionMs,
       maxChunks: options.maxChunks, maxBytes: options.maxBytes });
     if (mode === 'existing') {
+      openingStage = 'AUDIO_RECOVERY';
       buffer.freezeCapture();
       buffer.purgeExpired();
       if (buffer.purged() || buffer.dropped()) {
@@ -143,10 +158,13 @@ async function openNativeBuffer(options: BufferOptions, mode: 'create' | 'existi
         throw storageFailure();
       }
       if (buffer.pending() > options.maxChunks || buffer.bytes() > (options.maxBytes ?? 8 * 1024 * 1024)) throw storageFailure();
-    } else await bufferJournal.edit(id, lease, row => {
-      if (row?.state !== 'creating') throw new Error('Ses deposu başlangıcı doğrulanamadı.');
-      return { ...row, state: 'ready' };
-    });
+    } else {
+      openingStage = 'AUDIO_READY';
+      await bufferJournal.edit(id, lease, row => {
+        if (row?.state !== 'creating') throw new Error('Ses deposu başlangıcı doğrulanamadı.');
+        return { ...row, state: 'ready' };
+      });
+    }
     timer = setInterval(() => {
       if (closed) return;
       try { buffer.purgeExpired(); }
@@ -191,10 +209,10 @@ async function openNativeBuffer(options: BufferOptions, mode: 'create' | 'existi
         return destroying;
       },
     };
-  } catch {
+  } catch (error) {
     const close = () => { db?.closeSync(); releaseLease(); failedOpens.delete(id); };
     try { close(); } catch { failedOpens.set(id, close); }
-    throw storageFailure(); // Never propagate native SQL/key diagnostics to the screen.
+    throw error instanceof BufferStorageError ? error : new BufferStorageError(openingStage);
   }
 }
 
