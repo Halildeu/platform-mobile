@@ -1,4 +1,5 @@
 import { DetailedCapture, DETAIL_MAX_RETENTION_MS, DETAIL_LIMIT, DETAIL_REPORT_CHARACTERS, type DetailEntry } from './detailedCapture';
+import { SERVER_FAILURE_CODES } from '../audio/serverFailure';
 /** The ordinary report persists metadata; explicitly enabled content uses a separate table/export. */
 export const HISTORY_DAYS = 30;
 export const HISTORY_LIMIT = 20000;
@@ -63,6 +64,7 @@ export function cleanDetails(input: Details): Entry['data'] {
     else if (metricKeys.has(key) && (value === null || typeof value === 'boolean' ||
       (typeof value === 'number' && Number.isSafeInteger(value) && value >= -1))) data[key] = value;
     else if (key === 'platform' && ['android', 'ios', 'web'].includes(value as string)) data[key] = value as string;
+    else if (key === 'serverErrorCode' && typeof value === 'string' && (SERVER_FAILURE_CODES as readonly string[]).includes(value)) data[key] = value;
     else if (key === 'reason' && typeof value === 'string' && reasons.has(value)) data[key] = value;
     else if (key === 'appVersion' && typeof value === 'string' && /^\d+\.\d+\.\d+$/.test(value)) data[key] = value;
   }

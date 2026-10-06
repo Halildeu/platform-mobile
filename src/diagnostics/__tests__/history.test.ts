@@ -2,6 +2,11 @@ import { DiagnosticHistory, cleanDetails, decodeEntry, type Entry, type HistoryS
 import { messageEvent } from '../messageEvent';
 
 const meeting = '604593c5-9c2d-4c86-bc1d-2aec2270cf99';
+test('provider failure codes survive history sanitization but arbitrary messages never do', () => {
+  expect(cleanDetails({ serverErrorCode: 'SPEECHMATICS_BUFFER_ERROR' }))
+    .toEqual({ serverErrorCode: 'SPEECHMATICS_BUFFER_ERROR' });
+  expect(cleanDetails({ serverErrorCode: 'SPEECHMATICS_BUFFER_ERROR PRIVATE', msg: 'PRIVATE' })).toEqual({});
+});
 function store(): HistoryStore {
   const entries: Entry[] = [];
   return { append: e => { entries.push(e); }, read: id => ({ entries: entries.filter(e => e.meeting === id), removed: 0 }),

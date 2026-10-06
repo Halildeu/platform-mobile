@@ -1,5 +1,6 @@
 import { encodeGatewayLivePcm16Frame } from './gatewayFrame';
 import { OfflineAudioBuffer } from './offlineBuffer';
+import { serverFailureCode, type ServerFailureCode } from './serverFailure';
 import { readSpeakerAttribution, type SpeakerAttribution } from '../transcript/speakerAttribution';
 
 export interface LiveText {
@@ -40,6 +41,7 @@ export class ForegroundStream {
   private connectionGeneration = 0;
   private retries = 0;
   private continuityLost = false;
+  private serverErrorCode: ServerFailureCode | undefined;
   /** Same uninterrupted provider bridge, not merely the most recent gateway receipt. */
   completionConfirmed(): boolean { return !!this.telemetry.drainedUtc && !this.continuityLost; }
   private telemetry = { capturedBuffers: 0, capturedBytes: 0, sentFrames: 0, acknowledgedFrames: 0,
@@ -50,7 +52,8 @@ export class ForegroundStream {
   diagnostics() {
     return { ...this.telemetry, generatedFrames: this.seq, pendingFrames: this.pendingFrames(),
       expiredFrames: this.buffer?.purged() ?? 0, evictedFrames: this.buffer?.dropped() ?? 0,
-      deliveryReceiptsAvailable: !!this.buffer, reconnectAttempts: this.retries, continuityLost: this.continuityLost };
+      deliveryReceiptsAvailable: !!this.buffer, reconnectAttempts: this.retries, continuityLost: this.continuityLost,
+      ...(this.serverErrorCode ? { serverErrorCode: this.serverErrorCode } : {}) };
   }
 
   private pendingFrames(): number | null {
@@ -300,7 +303,8 @@ export class ForegroundStream {
       }
       this.sendEofWhenAcknowledged();
     } else if (event.type === 'error') {
-      this.fail('Ses sunucusu hata bildirdi. Test durduruldu.');
+      this.serverErrorCode = serverFailureCode(event.msg);
+      this.fail(`Ses sunucusu hata bildirdi. Test durduruldu. İnceleme kodu: ${this.serverErrorCode}.`);
     } else if (event.type === 'drained' && this.stopping && this.eofSent) {
       this.telemetry.drainedUtc = new Date().toISOString();
       const resolve = this.stopResolve;

@@ -12,6 +12,23 @@ function setup(buffer?: OfflineAudioBuffer) {
 beforeEach(() => jest.useFakeTimers());
 afterEach(() => jest.useRealTimers());
 
+test.each(['SPEECHMATICS_BUFFER_ERROR', 'SPEECHMATICS_QUOTA_EXCEEDED', 'PRIVATE transcript/token', null])(
+  'terminal provider errors retain pending PCM and expose only an allowlisted code: %s', (msg) => {
+    const { client, event, fail, socket } = setup(new OfflineAudioBuffer());
+    event({ type: 'ready' });
+    client.send(new ArrayBuffer(3200), 16000, 1, 0);
+    event({ type: 'error', msg, reason: 'PRIVATE' });
+    const expected = typeof msg === 'string' && msg.startsWith('SPEECHMATICS_') ? msg : 'SERVER_ERROR_UNCLASSIFIED';
+    expect(client.diagnostics()).toMatchObject({ pendingFrames: 1, serverErrorCode: expected });
+    expect(client.completionConfirmed()).toBe(false);
+    expect(fail).toHaveBeenCalledTimes(1);
+    expect(fail).toHaveBeenCalledWith(expect.stringContaining(expected));
+    expect(JSON.stringify([client.diagnostics(), fail.mock.calls])).not.toContain('PRIVATE');
+    expect(socket.close).toHaveBeenCalledTimes(1);
+    expect(jest.getTimerCount()).toBe(0);
+  },
+);
+
 test('preserves validated source sample ranges without altering received text or inventing invalid ranges', () => {
   const { client, event, text } = setup();
   event({ type: 'ready' });
