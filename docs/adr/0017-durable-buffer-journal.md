@@ -70,6 +70,27 @@ reserved characters, reopen, cleanup and the old pre-capture `creating` intent.
 This reproduces the reported startup error without treating synthetic cipher
 capability as physical-device proof. A rebuilt APK still requires device acceptance.
 
+The 2026-10-06 device report for meeting 479f4b94-adb7-455d-a857-a1eed670802d
+confirms stage 3 completed and microphone capture started at 07:33:59 UTC.
+The subsequent airplane/network interruption screenshot reports close 1006 and
+38 unacknowledged chunks. The supplied history ends before the interruption,
+so it cannot establish the exact retry timing or the server-side close cause.
+An independent regression test reproduces a client defect: three immediately
+rejected reconnects exhausted recovery in 3.5 seconds, before a 30-second outage
+could end. Recovery now has a 60-second elapsed-time budget and exponential
+backoff capped at 10 seconds. A ready event with pending audio does not reset
+the budget; actual ACK progress does. An empty, ready connection clears it.
+Stop/dispose cancel it, and explicit server policy rejection remains terminal.
+The existing 2 MiB/2000-chunk capacity and TTL/loss guards can stop capture
+sooner and are unchanged. No buffer-size or retention expansion is implied.
+
+Regression coverage includes a 30-second outage with continuous PCM, ordered
+replay and ACKs, fast failures, hung factories, stale late sockets, repeated
+ready/close without receipts, and a later independent outage after ACK progress.
+These are transport simulations, not proof that Speechmatics transcribed all
+three device-test sentences. A reconnected provider bridge still cannot certify
+the original recording's complete source coverage; that boundary is unchanged.
+
 Tests use actual SQLite for rollback, reopened loss counters and persistent-file
 cleanup, with injected native boundaries. A synthetic cipher capability in
 those tests does not validate SQLCipher. Native keychain/keystore protection,

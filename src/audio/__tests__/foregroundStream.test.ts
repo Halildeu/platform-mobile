@@ -64,6 +64,41 @@ test('reconnect retains original sequence and ignores receipts from the old sock
   client.dispose(); expect(jest.getTimerCount()).toBe(0);
 });
 
+test('a 30 second outage with fast connection failures preserves audio until the network returns', async () => {
+  const { first, second, buffer, ready, fail, connect, client, emit } = recoverySetup();
+  let online = false;
+  connect.mockImplementation(async () => {
+    if (!online) throw new Error('Network unavailable');
+    return second;
+  });
+  emit(first, { type: 'ready' });
+  client.send(new ArrayBuffer(32000), 16000, 1, Date.now());
+  emit(first, { type: 'audio_ack', chunk_seq: 0 });
+  first.onclose?.({ code: 1006 });
+  for (let second = 0; second < 30; second++) {
+    expect(client.send(new ArrayBuffer(32000), 16000, 1, Date.now())).toBe(true);
+    await jest.advanceTimersByTimeAsync(1000);
+  }
+  expect(fail).not.toHaveBeenCalled();
+  expect(buffer.pending()).toBe(30);
+  online = true;
+  await jest.advanceTimersByTimeAsync(10000);
+  emit(second, { type: 'ready' });
+  expect(ready).toHaveBeenCalledTimes(1); // Reconnect must not restart the microphone.
+  const replayed = jest.mocked(second.send).mock.calls.map(([frame]) => new DataView(frame as ArrayBuffer).getBigInt64(1));
+  expect(replayed).toEqual(Array.from({ length: 30 }, (_, i) => BigInt(i + 1)));
+  for (let seq = 1; seq <= 30; seq++) emit(second, { type: 'audio_ack', chunk_seq: seq });
+  expect(buffer.pending()).toBe(0);
+  expect(client.send(new ArrayBuffer(32000), 16000, 1, Date.now())).toBe(true);
+  emit(second, { type: 'audio_ack', chunk_seq: 31 });
+  const stopped = client.stop();
+  emit(second, { type: 'drained' });
+  expect(await stopped).toBe(true);
+  expect(client.completionConfirmed()).toBe(false); // Delivery is not provider continuity proof.
+  expect(fail).not.toHaveBeenCalled();
+  expect(jest.getTimerCount()).toBe(0);
+});
+
 test('reconnect keeps text chronological without overwriting old finals or leaving an active draft', async () => {
   const makeSocket = (): LiveSocket => ({ readyState: 1, bufferedAmount: 0, onopen: null, onmessage: null,
     onerror: null, onclose: null, send: jest.fn(), close: jest.fn() });
@@ -135,10 +170,79 @@ test('a hung socket factory is bounded and late sockets are disposed', async () 
   let late!: (socket: LiveSocket) => void;
   connect.mockImplementation(() => new Promise(resolve => { late = resolve; }));
   emit(first, { type: 'ready' }); first.onclose?.({ code: 1006 });
-  await jest.advanceTimersByTimeAsync(50000);
-  expect(connect).toHaveBeenCalledTimes(3); expect(fail).toHaveBeenCalledTimes(1);
+  await jest.advanceTimersByTimeAsync(59999);
+  expect(fail).not.toHaveBeenCalled();
+  await jest.advanceTimersByTimeAsync(1);
+  expect(fail).toHaveBeenCalledTimes(1);
+  expect(fail.mock.calls[0][0]).toContain('60 saniye');
   late(second); await Promise.resolve();
-  expect(second.close).toHaveBeenCalled(); client.dispose();
+  expect(second.close).toHaveBeenCalled();
+  const attempts = connect.mock.calls.length;
+  await jest.advanceTimersByTimeAsync(30000);
+  expect(connect).toHaveBeenCalledTimes(attempts);
+  client.dispose(); expect(jest.getTimerCount()).toBe(0);
+});
+
+test('fast failures get the same finite window and leave unacknowledged audio intact', async () => {
+  const { first, buffer, client, emit, connect, fail } = recoverySetup();
+  connect.mockRejectedValue(new Error('Offline'));
+  emit(first, { type: 'ready' });
+  client.send(new ArrayBuffer(2), 16000, 1, Date.now());
+  first.onclose?.({ code: 1006 });
+  await jest.advanceTimersByTimeAsync(59999);
+  expect(fail).not.toHaveBeenCalled();
+  expect(connect.mock.calls.length).toBeGreaterThan(3);
+  await jest.advanceTimersByTimeAsync(1);
+  expect(fail).toHaveBeenCalledTimes(1);
+  expect(fail.mock.calls[0][0]).toContain('bekleyen ses parçası: 1');
+  expect(buffer.pending()).toBe(1);
+  expect(client.completionConfirmed()).toBe(false);
+  expect(jest.getTimerCount()).toBe(0);
+});
+
+test('ready then close without a receipt cannot repeatedly extend the recovery window', async () => {
+  const { first, second, buffer, client, emit, connect, fail } = recoverySetup();
+  let nextSocket: LiveSocket | undefined;
+  connect.mockImplementation(async () => {
+    nextSocket = { ...second, onopen: null, onmessage: null, onclose: null, onerror: null };
+    return nextSocket;
+  });
+  emit(first, { type: 'ready' });
+  client.send(new ArrayBuffer(2), 16000, 1, Date.now());
+  first.onclose?.({ code: 1006 });
+  for (let elapsed = 0; elapsed < 59000; elapsed += 500) {
+    await jest.advanceTimersByTimeAsync(500);
+    if (nextSocket) {
+      emit(nextSocket, { type: 'ready' });
+      nextSocket.onclose?.({ code: 1006 });
+      nextSocket = undefined;
+    }
+  }
+  expect(fail).not.toHaveBeenCalled();
+  await jest.advanceTimersByTimeAsync(1000);
+  expect(fail).toHaveBeenCalledTimes(1);
+  expect(buffer.pending()).toBe(1);
+  expect(jest.getTimerCount()).toBe(0);
+});
+
+test('receipted recovery clears the outage deadline and permits a later independent outage', async () => {
+  const { first, second, client, buffer, emit, fail } = recoverySetup();
+  emit(first, { type: 'ready' });
+  client.send(new ArrayBuffer(2), 16000, 1, Date.now());
+  first.onclose?.({ code: 1006 });
+  await jest.advanceTimersByTimeAsync(500);
+  emit(second, { type: 'ready' });
+  emit(second, { type: 'audio_ack', chunk_seq: 0 });
+  await jest.advanceTimersByTimeAsync(60000);
+  expect(fail).not.toHaveBeenCalled();
+  second.onclose?.({ code: 1006 });
+  expect(client.send(new ArrayBuffer(2), 16000, 1, Date.now())).toBe(true);
+  await jest.advanceTimersByTimeAsync(500);
+  emit(second, { type: 'ready' });
+  emit(second, { type: 'audio_ack', chunk_seq: 1 });
+  expect(buffer.pending()).toBe(0);
+  expect(fail).not.toHaveBeenCalled();
+  client.dispose(); expect(jest.getTimerCount()).toBe(0);
 });
 
 test('bounded memory queue drains when backpressure clears even after capture stops', async () => {

@@ -34,6 +34,7 @@ export class ForegroundStream {
   private stopResolve: ((drained: boolean) => void) | undefined;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private retryTimer: ReturnType<typeof setTimeout> | undefined;
+  private recoveryTimer: ReturnType<typeof setTimeout> | undefined;
   private reconnecting = false;
   private everReady = false;
   private connectionGeneration = 0;
@@ -157,6 +158,7 @@ export class ForegroundStream {
     if (!this.bufferIntact()) return Promise.resolve(false);
     this.stopping = true;
     clearTimeout(this.retryTimer);
+    clearTimeout(this.recoveryTimer);
     if (this.reconnecting) ++this.connectionGeneration;
     this.ready = false;
     clearTimeout(this.timer);
@@ -173,6 +175,7 @@ export class ForegroundStream {
     this.finished = true;
     ++this.connectionGeneration;
     clearTimeout(this.retryTimer);
+    clearTimeout(this.recoveryTimer);
     this.ready = false;
     clearTimeout(this.timer);
     clearTimeout(this.errorTimer);
@@ -222,13 +225,19 @@ export class ForegroundStream {
       this.recovery?.onConnectionInterrupted?.(this.connectionGeneration);
     }
     this.telemetry.closeCode = Number.isInteger(code) ? code! : 0;
-    if (this.recovery && this.buffer && this.everReady && !this.stopping && (code === 1006 || code === undefined) && this.retries < 3) {
+    if (this.recovery && this.buffer && this.everReady && !this.stopping && (code === 1006 || code === undefined)) {
       this.ready = false; this.reconnecting = true; this.transportError = true;
       clearTimeout(this.timer); clearTimeout(this.errorTimer);
+      // Offline native connections can fail immediately: three attempts lasted
+      // only 3.5 seconds. Allow a bounded outage window instead of counting errors.
+      // Ready without progress must not extend this window indefinitely.
+      if (!this.recoveryTimer) this.recoveryTimer = setTimeout(() => this.fail(
+        'Ses bağlantısı 60 saniye içinde yeniden kurulamadı veya bekleyen seslerin teslimi ilerlemedi. Kayıt eksik olarak durduruldu.',
+      ), 60000);
       const generation = ++this.connectionGeneration;
       try { this.socket.close(); } catch { /* Invalidate old callbacks and continue bounded recovery. */ }
       const attempt = ++this.retries;
-      this.recovery.onStatus(`Ses bağlantısı kesildi; ses geçici tamponda bekliyor. Yeniden bağlantı ${attempt}/3.`);
+      this.recovery.onStatus(`Ses bağlantısı kesildi; ses geçici tamponda bekliyor. Yeniden bağlantı deneniyor (${attempt}); en fazla 60 saniye beklenecek.`);
       this.retryTimer = setTimeout(() => this.guard(() => {
         if (this.finished || this.stopping || generation !== this.connectionGeneration) return;
         this.timer = setTimeout(() => {
@@ -243,7 +252,7 @@ export class ForegroundStream {
         }).catch(() => {
           if (!this.finished && !this.stopping && generation === this.connectionGeneration) this.guard(() => this.closed(1006));
         });
-      }), 500 * 2 ** (attempt - 1));
+      }), Math.min(500 * 2 ** Math.min(attempt - 1, 5), 10000));
       return;
     }
     const validCode = Number.isInteger(code) && code! >= 1000 && code! <= 4999;
@@ -269,6 +278,9 @@ export class ForegroundStream {
       this.transportError = false;
       this.buffer?.resetInFlight();
       this.waitingSince = this.buffer?.pending() ? Date.now() : undefined;
+      if (!this.buffer?.pending()) {
+        clearTimeout(this.recoveryTimer); this.recoveryTimer = undefined;
+      }
       if (this.buffer && !this.flushTimer) this.flushTimer = setInterval(() => this.guard(() => this.flushQueue()), 250);
       if (this.everReady) {
         this.recovery?.onStatus('Ses bağlantısı yeniden kuruldu; bekleyen parçalar gönderiliyor.');
@@ -282,6 +294,7 @@ export class ForegroundStream {
         this.telemetry.acknowledgedFrames++;
         this.telemetry.lastAckSeq = event.chunk_seq as number;
         this.telemetry.lastAckUtc = new Date().toISOString();
+        clearTimeout(this.recoveryTimer); this.recoveryTimer = undefined;
         this.retries = 0;
         this.waitingSince = this.buffer.pending() ? Date.now() : undefined;
       }
