@@ -1,10 +1,33 @@
 {
   "cli": {
-    "version": ">= 13.0.0",
+    "version": "24.7.0",
     "appVersionSource": "remote"
   },
   "build": {
+    "ota-development": {
+      "extends": "preview",
+      "channel": "development",
+      "environment": "development",
+      "env": { "MOBILE_OTA_ENABLED": "1" }
+    },
+    "ota-preview": {
+      "extends": "preview",
+      "environment": "preview",
+      "env": { "MOBILE_OTA_ENABLED": "1" }
+    },
+    "ota-production": {
+      "extends": "production",
+      "environment": "production",
+      "env": { "MOBILE_OTA_ENABLED": "1" }
+    },
+    "simulator": {
+      "extends": "preview",
+      "ios": { "simulator": true }
+    },
     "development": {
+      "channel": "development",
+      "environment": "development",
+      "env": { "MOBILE_OTA_ENABLED": "0" },
       "developmentClient": true,
       "distribution": "internal",
       "ios": {
@@ -12,12 +35,22 @@
       }
     },
     "preview": {
+      "channel": "preview",
+      "environment": "preview",
+      "env": {
+        "MOBILE_OTA_ENABLED": "0",
+        "MOBILE_AUDIO_BUFFER_RETENTION_MS": "900000"
+      },
       "distribution": "internal",
       "ios": {
         "simulator": false
       }
     },
     "production": {
+      "channel": "production",
+      "environment": "production",
+      "distribution": "store",
+      "env": { "MOBILE_OTA_ENABLED": "0" },
       "autoIncrement": true,
       "ios": {
         "buildConfiguration": "Release"
@@ -28,15 +61,15 @@
     }
   },
   "submit": {
-    "production": {
+    "internal": {
       "ios": {
-        "appleId": "OPERATOR_APPLE_ID",
-        "ascAppId": "ASC_APP_ID",
-        "appleTeamId": "TEAM_ID"
+        "bundleIdentifier": "com.workcube.meeting"
       },
       "android": {
-        "serviceAccountKeyPath": "./play-store-credentials.json",
-        "track": "internal"
+        "applicationId": "com.workcube.meeting",
+        "track": "internal",
+        "releaseStatus": "completed",
+        "changesNotSentForReview": false
       }
     }
   }

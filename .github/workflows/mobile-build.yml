@@ -1,0 +1,75 @@
+name: Mobile EAS package build
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        type: choice
+        options: [android, ios]
+        required: true
+      channel:
+        type: choice
+        options: [development, preview, production]
+        required: true
+      ota:
+        description: 'Build the opt-in OTA profile (requires separate update acceptance)'
+        type: boolean
+        default: false
+      existing_build_id:
+        description: 'Optional exact build UUID: read/verify only, never create another'
+        type: string
+      source_commit:
+        description: 'Original 40-character source SHA; required when verifying an existing build'
+        type: string
+      execute:
+        description: 'Create one build; false prepares config only. Existing ID always reads only.'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: mobile-build-${{ inputs.platform }}
+  cancel-in-progress: false
+jobs:
+  build:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
+    environment: mobile-${{ inputs.channel }}
+    env:
+      PACKAGE_OPERATION: build
+      PACKAGE_PLATFORM: ${{ inputs.platform }}
+      PACKAGE_CHANNEL: ${{ inputs.channel }}
+      PACKAGE_OTA: ${{ inputs.ota }}
+      PACKAGE_BUILD_ID: ${{ inputs.existing_build_id }}
+      PACKAGE_SOURCE_COMMIT: ${{ inputs.source_commit }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: node --test scripts/package-*.test.mjs scripts/release-config.test.mjs
+      - run: npm run typecheck
+      - run: npm test -- --runInBand
+      - run: node scripts/package-execute.mjs --intent
+      - run: npm install --global eas-cli@24.7.0
+      - run: node scripts/package-cli-check.mjs
+      - name: Create once or verify the existing package
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          APPLY_PACKAGE: ${{ inputs.execute }}
+        shell: bash
+        run: |
+          if [ "$APPLY_PACKAGE" = 'true' ]; then
+            node scripts/package-execute.mjs --execute
+          else
+            node scripts/package-execute.mjs
+          fi
+      - name: Preserve receipt and downloaded archive
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-build-${{ inputs.platform }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-evidence/
+          retention-days: 14
