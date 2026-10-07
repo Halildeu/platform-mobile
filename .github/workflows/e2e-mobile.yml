@@ -86,6 +86,8 @@ jobs:
           echo "MOBILE_FCM_TEST=1" >> "$GITHUB_ENV"
           echo "MOBILE_FCM_CONFIG_PATH=$RUNNER_TEMP/google-services-test.json" >> "$GITHUB_ENV"
           echo "MOBILE_NATIVE_PUSH_ORG_ID=$TEST_ORG" >> "$GITHUB_ENV"
+      - name: Record checked-out source revision
+        run: echo "MOBILE_SOURCE_REVISION=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
       - name: Generate native project from this checkout
         run: npx expo prebuild --platform android --no-install
       - name: Build APK from this checkout

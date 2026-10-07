@@ -2,6 +2,36 @@ import { DiagnosticHistory, cleanDetails, decodeEntry, type Entry, type HistoryS
 import { messageEvent } from '../messageEvent';
 
 const meeting = '604593c5-9c2d-4c86-bc1d-2aec2270cf99';
+test('short report keeps failure and run identity despite later transcript noise and read failures', () => {
+  const h = new DiagnosticHistory(store());
+  h.record(meeting, 'run_started', { runId: meeting, sourceRevision: 'a'.repeat(40) });
+  h.record(meeting, 'session', { runId: meeting, sessionId: 'SES-test' });
+  h.record(meeting, 'capture_failed', { runId: meeting, serverErrorCode: 'SPEECHMATICS_BUFFER_ERROR' });
+  for (let i = 0; i < 500; i++) h.record(meeting, 'transcript', { seq: i });
+  h.record(meeting, 'request_failed', { status: 404 });
+  const short = h.shortReport(meeting);
+  expect(short.length).toBeLessThan(3300);
+  expect(short).toContain('SPEECHMATICS_BUFFER_ERROR');
+  expect(short).toContain('SES-test'); expect(short).toContain('a'.repeat(40));
+  const lines = short.split('\n').filter(line => line.includes(' | '));
+  for (const line of lines) expect(() => JSON.parse(line.split(' | ')[2])).not.toThrow();
+  expect(short).toContain(`Bu özette gösterilmeyen olay: ${504 - lines.length}.`);
+  expect(h.report(meeting)).toContain('"seq":499');
+  h.close(); expect(() => h.shortReport(meeting)).toThrow();
+});
+test('source revision never permits arbitrary diagnostic content', () => {
+  expect(cleanDetails({ sourceRevision: 'a'.repeat(40) })).toEqual({ sourceRevision: 'a'.repeat(40) });
+  expect(cleanDetails({ sourceRevision: 'PRIVATE' })).toEqual({});
+});
+test('failure counters survive a subsequent successful run', () => {
+  const h = new DiagnosticHistory(store()); const next = '11111111-1111-4111-8111-111111111111';
+  h.record(meeting, 'transport', { runId: meeting, pendingFrames: 264 });
+  h.record(meeting, 'capture_failed', { runId: meeting });
+  h.record(meeting, 'run_started', { runId: next });
+  for (let i = 0; i < 500; i++) h.record(meeting, 'transport', { runId: next, pendingFrames: 0 });
+  const report = h.shortReport(meeting);
+  expect(report).toContain('"pendingFrames":264'); expect(report).toContain('"pendingFrames":0');
+});
 test('provider failure codes survive history sanitization but arbitrary messages never do', () => {
   expect(cleanDetails({ serverErrorCode: 'SPEECHMATICS_BUFFER_ERROR' }))
     .toEqual({ serverErrorCode: 'SPEECHMATICS_BUFFER_ERROR' });

@@ -9,6 +9,21 @@ const YAML = require('yaml');
 const appConfig = require('../app.config.js');
 const base = JSON.parse(readFileSync('app.json', 'utf8')).expo;
 const eas = JSON.parse(readFileSync('eas.json', 'utf8'));
+test('source identity is validated and cannot drift OTA fingerprints', () => {
+  const prior = process.env.MOBILE_SOURCE_REVISION, ota = process.env.MOBILE_OTA_ENABLED;
+  try {
+    delete process.env.MOBILE_OTA_ENABLED;
+    process.env.MOBILE_SOURCE_REVISION = 'a'.repeat(40);
+    assert.equal(appConfig({ config: structuredClone(base) }).extra.sourceRevision, 'a'.repeat(40));
+    process.env.MOBILE_SOURCE_REVISION = 'PRIVATE';
+    assert.throws(() => appConfig({ config: structuredClone(base) }), /full lowercase Git SHA/);
+    process.env.MOBILE_SOURCE_REVISION = 'a'.repeat(40); process.env.MOBILE_OTA_ENABLED = '1';
+    assert.throws(() => appConfig({ config: structuredClone(base) }), /OTA-disabled/);
+  } finally {
+    if (prior === undefined) delete process.env.MOBILE_SOURCE_REVISION; else process.env.MOBILE_SOURCE_REVISION = prior;
+    if (ota === undefined) delete process.env.MOBILE_OTA_ENABLED; else process.env.MOBILE_OTA_ENABLED = ota;
+  }
+});
 
 function profile(name) {
   const own = eas.build[name];

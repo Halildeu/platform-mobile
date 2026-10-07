@@ -3,6 +3,7 @@ import { AppState } from 'react-native';
 import { mobileSession } from '../auth/mobileSession';
 import { resultExporter } from './nativeResultExport';
 import { ExportCancelled } from './resultExportManager';
+import { reportFileExporter } from '../diagnostics/reportFile';
 
 export function useResultExport(contentScope: number | null) {
   const lifecycle = useRef(0);
@@ -33,8 +34,9 @@ export function useResultExport(contentScope: number | null) {
 export function useExportCacheCleanup() {
   useEffect(() => {
     // Threshold-based cleanup; a suspended/terminated JS process cannot promise a deadline.
-    const clean = () => { void resultExporter.cleanup().catch(() => {}); };
+    const clean = () => { void resultExporter.cleanup().catch(() => {}); void reportFileExporter.cleanup().catch(() => {}); };
     void resultExporter.cleanup(true).catch(() => {});
+    void reportFileExporter.cleanup(true).catch(() => {});
     const listener = AppState.addEventListener('change', state => { if (state === 'active') clean(); });
     const timer = setInterval(clean, 60000);
     return () => { listener.remove(); clearInterval(timer); };

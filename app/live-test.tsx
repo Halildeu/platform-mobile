@@ -14,6 +14,7 @@ import Constants from 'expo-constants';
 import { DiagnosticHistory, diagnosticStage, type DiagnosticKind, type Details } from '../src/diagnostics/history';
 import { messageEvent } from '../src/diagnostics/messageEvent';
 import { HistoryPanel } from '../src/diagnostics/HistoryPanel';
+import { sourceIdentity } from '../src/diagnostics/sourceIdentity';
 import { openAccountHistory } from '../src/diagnostics/openAccountHistory';
 import { diagnosticFailureCode, type DiagnosticFailureCode } from '../src/diagnostics/openFailure';
 import { createRecordingBuffer, prepareRecordingStorage } from '../src/audio/recordingBuffer';
@@ -391,7 +392,7 @@ export default function LiveTestScreen() {
     if (id === selected) return;
     generation.current++;
     currentRun.current = undefined;
-    try { history?.record(id, 'opened', { platform: Platform.OS, appVersion: Constants.expoConfig?.version }); }
+    try { history?.record(id, 'opened', { platform: Platform.OS, ...sourceIdentity() }); }
     catch { setHistoryFailure(true); }
     stopAnalysis.current?.(); stopAnalysis.current = null;
     const cached = id ? readMeetingView(id) : undefined;
@@ -456,7 +457,7 @@ export default function LiveTestScreen() {
       try { currentRun.current = Crypto.randomUUID(); }
       catch { throw new Error('Kayıt hazırlığı tamamlanamadı. İnceleme kodu: START_ID. Yeniden deneyebilirsiniz.'); }
       setDiagnostics([`Mobil tanılama v3 | Deneme: ${currentRun.current} | UTC: ${new Date().toISOString()} | Toplantı: ${selected}`, 'Standart teknik rapor konuşma içeriği içermez. Uygulama zorla kapatılırsa son olay kaydedilemeyebilir.']);
-      record('run_started', { runId: currentRun.current, background, platform: Platform.OS, appVersion: Constants.expoConfig?.version });
+      record('run_started', { runId: currentRun.current, background, platform: Platform.OS, ...sourceIdentity() });
       markStage('Mikrofon izni');
       if (audioBuffer.current) { await audioBuffer.current.release(); audioBuffer.current = null; }
       markStage('Oturum geçerliliği');

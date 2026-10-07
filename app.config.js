@@ -3,6 +3,13 @@ const path = require('node:path');
 
 // Opt-in Android TEST configuration. Never accept server credentials in an APK.
 module.exports = ({ config }) => {
+  const sourceRevision = process.env.MOBILE_SOURCE_REVISION;
+  if (sourceRevision !== undefined) {
+    if (!/^[0-9a-f]{40}$/.test(sourceRevision) || process.env.MOBILE_OTA_ENABLED === '1') {
+      throw new Error('Source revision requires a full lowercase Git SHA and an OTA-disabled APK build.');
+    }
+    config = { ...config, extra: { ...config.extra, sourceRevision } };
+  }
   const audioRetention = process.env.MOBILE_AUDIO_BUFFER_RETENTION_MS;
   if (audioRetention !== undefined) {
     if (audioRetention !== '900000') {

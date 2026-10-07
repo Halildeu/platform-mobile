@@ -1,5 +1,7 @@
 # Mobil kalan kabul koşulları — 2026-09-10
 
+Bu tarihsel kayıttır. Yeni çalışma için [7 Ekim güncel devam kaydını](mobile-status-2026-10-07.md) kullanın.
+
 Bu çalışma kopyasındaki değişiklikler son dağıtılan tanılama APK'sında yoktur.
 GitHub issue kapanışı, uzaktan CI başarısı veya cihaz kabulü beyan edilmez.
 

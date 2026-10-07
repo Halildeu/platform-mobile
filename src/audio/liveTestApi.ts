@@ -4,6 +4,7 @@ import * as SecureStore from 'expo-secure-store';
 import { requestFailure } from './requestFailure';
 import { mobileSession } from '../auth/mobileSession';
 import { SessionExpired } from '../auth/sessionManager';
+import { reportFileExporter } from '../diagnostics/reportFile';
 import { parsePersistedResult } from '../analysis/persistedResult';
 import { canonicalId, parseRecordingChoices, parseProcessingStatus, ProcessingStatusReadError } from '../analysis/processingStatus';
 import { parseSavedTranscript, type SavedTranscriptDocument } from '../analysis/savedTranscript';
@@ -167,6 +168,7 @@ export async function logout(): Promise<boolean> {
   // Invalidates in-flight exports before remote revocation. Failed cleanup is retried by the cache sweep.
   const session = await mobileSession.valid().catch(() => null);
   await resultExporter.cleanup(true).catch(() => {});
+  await reportFileExporter.cleanup(true).catch(() => {});
   const pushCleared = await disableNativePush().catch(() => false);
   const audioCleared = session
     ? await clearAudioBuffersForLogout(session.jwt).catch(() => false)

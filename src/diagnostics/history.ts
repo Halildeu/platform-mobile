@@ -67,6 +67,7 @@ export function cleanDetails(input: Details): Entry['data'] {
     else if (key === 'serverErrorCode' && typeof value === 'string' && (SERVER_FAILURE_CODES as readonly string[]).includes(value)) data[key] = value;
     else if (key === 'reason' && typeof value === 'string' && reasons.has(value)) data[key] = value;
     else if (key === 'appVersion' && typeof value === 'string' && /^\d+\.\d+\.\d+$/.test(value)) data[key] = value;
+    else if (key === 'sourceRevision' && typeof value === 'string' && /^[0-9a-f]{40}$/.test(value)) data[key] = value;
   }
   return data;
 }
@@ -130,6 +131,43 @@ export class DiagnosticHistory {
     ].join('\n');
   }
   clearDetails(meeting: string) { if (!this.closed && UUID.test(meeting)) this.store.clearDetails?.(meeting); }
+  shortReport(meeting: string): string {
+    if (this.closed || !UUID.test(meeting)) throw new Error('Tanılama oturumu kapalı.');
+    const { entries, removed } = this.store.read(meeting, this.cutoff());
+    // Failure and its run/session precede noisy transcript events. Keep full lines.
+    const selected = new Set<number>();
+    const priorities: number[] = [];
+    const last = (predicate: (e: Entry) => boolean) => {
+      for (let i = entries.length - 1; i >= 0; i--) if (predicate(entries[i])) { priorities.push(i); return entries[i]; }
+      return undefined;
+    };
+    const failure = last(e => e.kind === 'capture_failed');
+    last(e => e.kind === 'request_failed');
+    if (failure?.data.runId) {
+      last(e => e.kind === 'transport' && e.data.runId === failure.data.runId);
+      last(e => e.kind === 'run_started' && e.data.runId === failure.data.runId);
+      last(e => e.kind === 'session' && e.data.runId === failure.data.runId);
+    }
+    for (const kind of ['run_started', 'session', 'transport', 'stop_requested', 'drained', 'http_finished'] as const)
+      last(e => e.kind === kind);
+    for (let i = entries.length - 1; i >= 0; i--) priorities.push(i);
+    const lines: string[] = [];
+    let characters = 0;
+    for (const index of priorities) {
+      if (selected.has(index)) continue;
+      const e = entries[index];
+      const line = `${new Date(e.at).toISOString()} | ${kinds[e.kind]} | ${JSON.stringify(e.data)}`;
+      if (characters + line.length + 1 > 2600) continue;
+      selected.add(index); lines.push(line); characters += line.length + 1;
+    }
+    return ['Kısa mobil tanılama v1', `Toplantı: ${meeting}`,
+      'Öncelikli hata ve son olaylar; kronolojik sıra değildir. Ham ses ve konuşma metni içermez.',
+      `Bu özette gösterilmeyen olay: ${entries.length - selected.size}. Saklama sınırı nedeniyle kaldırılan (hesap toplamı): ${removed}.`,
+      'Tam geçmişi dosya olarak paylaşabilirsiniz. Sunucunun iç hata nedenini tek başına doğrulamaz.',
+      ...(this.error ? ['UYARI: Depolama hatası nedeniyle geçmiş eksik olabilir.'] : []),
+      ...(lines.length ? lines : ['Saklanmış teknik olay bulunmuyor.']),
+    ].join('\n');
+  }
   report(meeting: string): string {
     if (this.closed || !UUID.test(meeting)) throw new Error('Tanılama oturumu kapalı.');
     const { entries, removed } = this.store.read(meeting, this.cutoff());
